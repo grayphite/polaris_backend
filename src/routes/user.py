@@ -59,8 +59,8 @@ def login_user():
         if not data.get('email') or not data.get('senha'):
             return jsonify({'error': 'Email e senha são obrigatórios'}), 400
 
-        result = auth_service.authenticate_user(
-            email=data['email'],
+        result = auth_service.login(
+            username_or_email=data['email'],
             password=data['senha']
         )
 
