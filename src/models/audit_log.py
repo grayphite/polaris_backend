@@ -2,7 +2,7 @@
 Modelos para auditoria e logging
 """
 from datetime import datetime
-from .user import db
+from src.database import db
 
 
 class AuditLog(db.Model):

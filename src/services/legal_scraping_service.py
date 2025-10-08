@@ -29,7 +29,8 @@ except ImportError:
     selenium = None
     webdriver = None
 
-from src.models import db, LegalSource, ScrapedContent
+from src.database import db
+from src.models import LegalSource, ScrapedContent
 
 
 @dataclass

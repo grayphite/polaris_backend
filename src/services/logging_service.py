@@ -16,7 +16,8 @@ from enum import Enum
 import traceback
 import functools
 
-from src.models import db, AuditLog
+from src.database import db
+from src.models import AuditLog
 
 
 class LogLevel(Enum):

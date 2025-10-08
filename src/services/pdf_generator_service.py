@@ -27,7 +27,8 @@ except ImportError:
     Paragraph = None
     HTML = None
 
-from src.models import db, DocumentoGerado
+from src.database import db
+from src.models import DocumentoGerado
 
 
 @dataclass

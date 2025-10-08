@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 
-from src.models import db, Cliente
+from src.database import db
+from src.models import Cliente
 
 logger = logging.getLogger(__name__)
 
