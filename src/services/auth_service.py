@@ -8,7 +8,7 @@ validação de permissões e controle de sessões.
 import os
 import jwt
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
 from functools import wraps
@@ -17,12 +17,14 @@ from flask import request, jsonify, current_app
 from src.models import User
 from src.database import db
 
+APP_BASE_URL=os.getenv("APP_BASE_URL", "http://localhost:3000")
 
 @dataclass
 class AuthResult:
     """Resultado de operação de autenticação"""
     success: bool
     user: Optional[Dict] = None
+    message: Optional[str] = None
     token: Optional[str] = None
     error: Optional[str] = None
     expires_at: Optional[datetime] = None
@@ -46,6 +48,7 @@ class AuthService:
         self.algorithm = 'HS256'
         self.token_expiry_hours = 24
         self.refresh_token_expiry_days = 30
+        self.reset_password_expiry_minutes = 30
     
     def register_user(self, username: str, email: str, password: str, 
                      first_name: str = None, last_name: str = None) -> AuthResult:
@@ -464,12 +467,90 @@ class AuthService:
                 "error": str(e),
                 "last_test": datetime.utcnow().isoformat()
             }
+
+    def reset_password_request(self, email: str) -> AuthResult:
+        """
+        Solicitar redefinição de senha (placeholder)
+
+        Args:
+            email: Email do usuário
+
+        Returns:
+            AuthResult com resultado da operação
+        """
+        try:
+            # Buscar usuário pelo email
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return AuthResult(
+                    success=False,
+                    error="Usuário com este email não encontrado"
+                )
+
+            # Aqui geraria um token de redefinição e enviaria por email
+            # Placeholder - implementar envio de email quando EmailService estiver pronto
+            expires_at = datetime.now(UTC) + timedelta(minutes=self.reset_password_expiry_minutes)
+            reset_token = self._generate_token(user, expires_at=expires_at)
+            reset_link = f"{APP_BASE_URL}/reset-password?token={reset_token[0]}"
+
+            from src.services import email_service
+
+            state = email_service.send_reset_password_email(user_email=email, reset_link=reset_link)
+            if not state['success']:
+                return AuthResult(
+                    success=False,
+                    error="Erro ao enviar email de redefinição"
+                )
+            # Simular envio de email
+            self._log_error(f"Redefinição de senha solicitada para {email}. Token: {reset_token}")
+
+            return AuthResult(
+                success=True,
+                message="Instruções para redefinição de senha enviadas para o email"
+            )
+
+        except Exception as e:
+            self._log_error(f"Erro na solicitação de redefinição de senha: {str(e)}")
+            return AuthResult(
+                success=False,
+                error="Erro interno na solicitação de redefinição"
+            )
+    
+    def reset_password(self, token: str, password: str) -> AuthResult:
+        """
+        Redefinir senha do usuário
+        """
+        try:
+            user = self.get_user_by_token(token)
+            if not user:
+                return AuthResult(
+                    success=False,
+                    error="Usuário não encontrado"
+                )
+                
+            user.password_hash = self._hash_password(password)
+            user.updated_at = datetime.now(UTC)
+            db.session.commit()
+
+            return AuthResult(
+                success=True,
+                message="Senha redefinida com sucesso"
+            )
+
+        except Exception as e:
+            self._log_error(f"Erro na redefinição de senha: {str(e)}")
+            return AuthResult(
+                success=False,
+                error="Erro interno na redefinição de senha"
+            )
     
     # Métodos privados auxiliares
     
-    def _generate_token(self, user: User) -> tuple[str, datetime]:
+    def _generate_token(self, user: User, expires_at: datetime = None) -> tuple[str, datetime]:
         """Gerar token JWT para usuário"""
-        expires_at = datetime.utcnow() + timedelta(hours=self.token_expiry_hours)
+
+        if not expires_at:
+            expires_at = datetime.now(UTC) + timedelta(hours=self.token_expiry_hours)
         
         payload = {
             'user_id': user.id,
