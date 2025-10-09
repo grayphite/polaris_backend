@@ -636,7 +636,7 @@ def require_auth(f):
         
         # Validar token
         validation_result = auth_service.validate_token(token)
-        if not validation_result.success:
+        if not validation_result.is_valid:
             return jsonify({'error': validation_result.error}), 401
         
         # Adicionar dados do usuário ao request

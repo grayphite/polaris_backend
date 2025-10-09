@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from src.models.user import User
-from src.services.auth_service import auth_service, require_auth
+from src.services.auth_service import auth_service
 from src.database import db
 
 user_bp = Blueprint('user', __name__)
@@ -146,7 +146,7 @@ def reset_password():
 
 
 @user_bp.route('/users/change-password', methods=['POST'])
-@require_auth
+@auth_service.require_auth
 def change_user_password():
     data = request.json
     user = request.current_user
