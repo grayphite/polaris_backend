@@ -97,6 +97,8 @@ def get_user(user_id):
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
     data = request.json
+    user.first_name = data.get("first_name", user.first_name)
+    user.last_name = data.get("last_name", user.last_name)
     user.username = data.get('username', user.username)
     user.email = data.get('email', user.email)
     db.session.commit()
