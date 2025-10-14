@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 
-from src.models import db
+from src.database import db
 from src.services.logging_service import logging_service, LogLevel
 
 

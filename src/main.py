@@ -3,12 +3,14 @@ POLARIS Backend - Sistema de Wealth Planning com IA
 Aplicação Flask principal
 """
 
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
+import logging
 import os
 from datetime import datetime
-import logging
+
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+
+from src.database import db
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +32,6 @@ else:
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'polaris-secret-key-dev')
 
-# Inicializar banco de dados
-db = SQLAlchemy(app)
-
 # Importar modelos
 from src.models.user import User
 from src.models.cliente import Cliente
@@ -49,6 +48,7 @@ from src.routes.search import search_bp
 # Tentar importar rotas enhanced (RAG)
 try:
     from src.services.rag_claude_integration import register_enhanced_ai_routes
+
     enhanced_routes_available = True
     logger.info("Enhanced AI routes (RAG) disponíveis")
 except ImportError:
@@ -71,11 +71,13 @@ if enhanced_routes_available:
     except Exception as e:
         logger.warning(f"Erro ao registrar enhanced AI routes: {str(e)}")
 
+
 # Rota para servir frontend
 @app.route('/')
 def serve_frontend():
     """Serve o frontend React"""
     return send_from_directory(app.static_folder, 'index.html')
+
 
 @app.route('/<path:path>')
 def serve_static(path):
@@ -84,6 +86,7 @@ def serve_static(path):
         return send_from_directory(app.static_folder, path)
     except:
         return send_from_directory(app.static_folder, 'index.html')
+
 
 # Health check
 @app.route('/api/health')
@@ -96,6 +99,7 @@ def health_check():
         'service': 'POLARIS Backend'
     })
 
+
 # Endpoint básico para chat (placeholder)
 @app.route('/api/generate-document', methods=['POST'])
 def generate_document():
@@ -103,16 +107,16 @@ def generate_document():
     try:
         data = request.get_json()
         prompt = data.get('prompt', '')
-        
+
         # Resposta simulada para demonstração
         response = {
             'success': True,
             'response': f'Esta é uma resposta simulada para: {prompt}. Para ativar o Claude AI, configure a variável ANTHROPIC_API_KEY.',
             'model': 'placeholder'
         }
-        
+
         return jsonify(response)
-    
+
     except Exception as e:
         logger.error(f"Erro no generate_document: {str(e)}")
         return jsonify({
@@ -120,9 +124,11 @@ def generate_document():
             'error': str(e)
         }), 500
 
+
 # Criar tabelas
 with app.app_context():
     try:
+        db.init_app(app)
         db.create_all()
         logger.info("Tabelas do banco de dados criadas com sucesso")
     except Exception as e:
@@ -131,4 +137,3 @@ with app.app_context():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-

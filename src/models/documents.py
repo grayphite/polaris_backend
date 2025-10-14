@@ -2,7 +2,7 @@
 Modelos para documentos e busca
 """
 from datetime import datetime
-from .user import db
+from src.database import db
 
 
 class DocumentoUpload(db.Model):

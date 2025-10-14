@@ -32,7 +32,8 @@ except ImportError:
     sent_tokenize = None
     PorterStemmer = None
 
-from src.models import db, DocumentoUpload, SearchIndex
+from src.database import db
+from src.models import DocumentoUpload, SearchIndex
 
 
 @dataclass

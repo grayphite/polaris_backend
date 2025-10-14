@@ -1,5 +1,6 @@
-from src.models.user import db
+from src.database import db
 from datetime import datetime
+
 
 class TemplateDeDocumento(db.Model):
     """Modelo para templates de documentos jurídicos do POLARIS"""

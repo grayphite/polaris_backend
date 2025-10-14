@@ -1,5 +1,5 @@
-from src.models.user import db
 from datetime import datetime
+from src.database import db
 
 class DocumentoGerado(db.Model):
     """Modelo para documentos gerados pelo sistema POLARIS"""

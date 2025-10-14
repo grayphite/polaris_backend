@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 import time
 
-from src.models import db, FonteJuridica
+from src.database import db
+from src.models import FonteJuridica
 
 
 @dataclass

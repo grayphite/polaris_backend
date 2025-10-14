@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from functools import wraps
 from flask import request, jsonify, current_app
 
-from src.models import db, User
+from src.models import User
+from src.database import db
 
 
 @dataclass

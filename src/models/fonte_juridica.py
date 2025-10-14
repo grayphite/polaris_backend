@@ -2,9 +2,7 @@
 Modelo para fontes jurídicas
 """
 from datetime import datetime
-
-# Importar db do user.py para manter consistência
-from .user import db
+from src.database import db
 
 
 class FonteJuridica(db.Model):

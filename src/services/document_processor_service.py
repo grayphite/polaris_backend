@@ -27,7 +27,8 @@ except ImportError:
     DocxDocument = None
     textract = None
 
-from src.models import db, DocumentoUpload
+from src.database import db
+from src.models import DocumentoUpload
 
 
 @dataclass
