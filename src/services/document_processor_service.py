@@ -5,14 +5,14 @@ Este service gerencia upload, processamento e extração de conteúdo
 de documentos PDF, DOC, DOCX, TXT para o sistema MCP.
 """
 
+import hashlib
+import mimetypes
 import os
 import uuid
-import mimetypes
-from datetime import datetime
-from typing import Dict, List, Optional, Any, BinaryIO
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-import hashlib
+from typing import Dict, List, Optional, Any, BinaryIO
 
 # Imports para processamento de documentos
 try:
@@ -27,7 +27,7 @@ except ImportError:
     DocxDocument = None
     textract = None
 
-from src.database import db
+from src.extensions import db
 from src.models import DocumentoUpload
 
 
@@ -57,23 +57,23 @@ class DocumentChunk:
 
 class DocumentProcessorService:
     """Service para processamento de documentos"""
-    
+
     def __init__(self):
         self.upload_dir = os.path.join(os.getcwd(), 'uploads')
         self.max_file_size = 50 * 1024 * 1024  # 50MB
         self.allowed_extensions = {'.pdf', '.doc', '.docx', '.txt', '.rtf'}
         self.chunk_size = 1000  # Caracteres por chunk
         self.chunk_overlap = 200  # Sobreposição entre chunks
-        
+
         # Criar diretório de upload se não existir
         os.makedirs(self.upload_dir, exist_ok=True)
-    
-    def upload_document(self, 
-                       file: BinaryIO,
-                       filename: str,
-                       user_id: int,
-                       category: str = None,
-                       metadata: Dict = None) -> ProcessingResult:
+
+    def upload_document(self,
+                        file: BinaryIO,
+                        filename: str,
+                        user_id: int,
+                        category: str = None,
+                        metadata: Dict = None) -> ProcessingResult:
         """
         Upload e processamento de documento
         
@@ -88,7 +88,7 @@ class DocumentProcessorService:
             ProcessingResult com resultado do processamento
         """
         start_time = datetime.utcnow()
-        
+
         try:
             # Validar arquivo
             validation_error = self._validate_file(file, filename)
@@ -97,28 +97,28 @@ class DocumentProcessorService:
                     success=False,
                     error=validation_error
                 )
-            
+
             # Gerar nome único para o arquivo
             file_extension = Path(filename).suffix.lower()
             unique_filename = f"{uuid.uuid4()}{file_extension}"
             file_path = os.path.join(self.upload_dir, unique_filename)
-            
+
             # Salvar arquivo
             file.seek(0)  # Reset file pointer
             file_content = file.read()
-            
+
             with open(file_path, 'wb') as f:
                 f.write(file_content)
-            
+
             # Calcular hash do arquivo
             file_hash = hashlib.md5(file_content).hexdigest()
-            
+
             # Verificar se arquivo já existe (por hash)
             existing_doc = DocumentoUpload.query.filter_by(
                 file_hash=file_hash,
                 user_id=user_id
             ).first()
-            
+
             if existing_doc:
                 # Remover arquivo duplicado
                 os.remove(file_path)
@@ -126,7 +126,7 @@ class DocumentProcessorService:
                     success=False,
                     error="Documento já foi enviado anteriormente"
                 )
-            
+
             # Extrair conteúdo
             content = self._extract_content(file_path, file_extension)
             if not content:
@@ -135,15 +135,15 @@ class DocumentProcessorService:
                     success=False,
                     error="Não foi possível extrair conteúdo do documento"
                 )
-            
+
             # Criar chunks
             chunks = self._create_chunks(content)
-            
+
             # Detectar MIME type
             mime_type, _ = mimetypes.guess_type(filename)
             if not mime_type:
                 mime_type = 'application/octet-stream'
-            
+
             # Preparar metadados
             doc_metadata = {
                 'original_filename': filename,
@@ -155,10 +155,10 @@ class DocumentProcessorService:
                 'category': category,
                 'processing_date': datetime.utcnow().isoformat()
             }
-            
+
             if metadata:
                 doc_metadata.update(metadata)
-            
+
             # Salvar no banco de dados
             documento = DocumentoUpload(
                 user_id=user_id,
@@ -173,13 +173,13 @@ class DocumentProcessorService:
                 processed=True,
                 category=category or 'general'
             )
-            
+
             db.session.add(documento)
             db.session.commit()
-            
+
             # Calcular tempo de processamento
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-            
+
             return ProcessingResult(
                 success=True,
                 document_id=documento.id,
@@ -190,19 +190,19 @@ class DocumentProcessorService:
                 word_count=len(content.split()),
                 processing_time=processing_time
             )
-            
+
         except Exception as e:
             db.session.rollback()
             # Limpar arquivo se houver erro
             if 'file_path' in locals() and os.path.exists(file_path):
                 os.remove(file_path)
-            
+
             self._log_error(f"Erro no upload: {str(e)}", user_id)
             return ProcessingResult(
                 success=False,
                 error="Erro interno no processamento do documento"
             )
-    
+
     def get_document(self, document_id: int, user_id: int) -> Optional[DocumentoUpload]:
         """
         Obter documento por ID
@@ -219,16 +219,16 @@ class DocumentProcessorService:
                 id=document_id,
                 user_id=user_id
             ).first()
-            
+
         except Exception as e:
             self._log_error(f"Erro ao obter documento: {str(e)}", user_id)
             return None
-    
-    def list_documents(self, 
-                      user_id: int,
-                      category: str = None,
-                      page: int = 1,
-                      per_page: int = 20) -> Dict[str, Any]:
+
+    def list_documents(self,
+                       user_id: int,
+                       category: str = None,
+                       page: int = 1,
+                       per_page: int = 20) -> Dict[str, Any]:
         """
         Listar documentos do usuário
         
@@ -243,16 +243,16 @@ class DocumentProcessorService:
         """
         try:
             query = DocumentoUpload.query.filter_by(user_id=user_id)
-            
+
             if category:
                 query = query.filter_by(category=category)
-            
+
             paginated = query.order_by(DocumentoUpload.created_at.desc()).paginate(
                 page=page,
                 per_page=per_page,
                 error_out=False
             )
-            
+
             return {
                 'documents': [doc.to_dict() for doc in paginated.items],
                 'pagination': {
@@ -264,7 +264,7 @@ class DocumentProcessorService:
                     'has_prev': paginated.has_prev
                 }
             }
-            
+
         except Exception as e:
             self._log_error(f"Erro ao listar documentos: {str(e)}", user_id)
             return {
@@ -278,7 +278,7 @@ class DocumentProcessorService:
                     'has_prev': False
                 }
             }
-    
+
     def delete_document(self, document_id: int, user_id: int) -> bool:
         """
         Excluir documento
@@ -295,25 +295,25 @@ class DocumentProcessorService:
                 id=document_id,
                 user_id=user_id
             ).first()
-            
+
             if not documento:
                 return False
-            
+
             # Remover arquivo físico
             if os.path.exists(documento.file_path):
                 os.remove(documento.file_path)
-            
+
             # Remover do banco
             db.session.delete(documento)
             db.session.commit()
-            
+
             return True
-            
+
         except Exception as e:
             db.session.rollback()
             self._log_error(f"Erro ao excluir documento: {str(e)}", user_id)
             return False
-    
+
     def reprocess_document(self, document_id: int, user_id: int) -> ProcessingResult:
         """
         Reprocessar documento existente
@@ -332,25 +332,25 @@ class DocumentProcessorService:
                     success=False,
                     error="Documento não encontrado"
                 )
-            
+
             # Reextrair conteúdo
             file_extension = Path(documento.original_filename).suffix.lower()
             content = self._extract_content(documento.file_path, file_extension)
-            
+
             if not content:
                 return ProcessingResult(
                     success=False,
                     error="Não foi possível reextrair conteúdo"
                 )
-            
+
             # Recriar chunks
             chunks = self._create_chunks(content)
-            
+
             # Atualizar documento
             documento.content_extracted = content
             documento.processed = True
             documento.updated_at = datetime.utcnow()
-            
+
             # Atualizar metadados
             if documento.metadata:
                 documento.metadata.update({
@@ -358,9 +358,9 @@ class DocumentProcessorService:
                     'chunk_count': len(chunks),
                     'reprocessed_at': datetime.utcnow().isoformat()
                 })
-            
+
             db.session.commit()
-            
+
             return ProcessingResult(
                 success=True,
                 document_id=documento.id,
@@ -370,7 +370,7 @@ class DocumentProcessorService:
                 chunks=[chunk.content for chunk in chunks],
                 word_count=len(content.split())
             )
-            
+
         except Exception as e:
             db.session.rollback()
             self._log_error(f"Erro no reprocessamento: {str(e)}", user_id)
@@ -378,7 +378,7 @@ class DocumentProcessorService:
                 success=False,
                 error="Erro interno no reprocessamento"
             )
-    
+
     def get_document_stats(self, user_id: int) -> Dict[str, Any]:
         """
         Obter estatísticas dos documentos do usuário
@@ -391,24 +391,24 @@ class DocumentProcessorService:
         """
         try:
             total_docs = DocumentoUpload.query.filter_by(user_id=user_id).count()
-            
+
             # Estatísticas por categoria
             category_stats = db.session.query(
                 DocumentoUpload.category,
                 db.func.count(DocumentoUpload.id).label('count')
             ).filter_by(user_id=user_id).group_by(DocumentoUpload.category).all()
-            
+
             # Tamanho total dos arquivos
             total_size = db.session.query(
                 db.func.sum(DocumentoUpload.file_size)
             ).filter_by(user_id=user_id).scalar() or 0
-            
+
             # Documentos processados
             processed_docs = DocumentoUpload.query.filter_by(
                 user_id=user_id,
                 processed=True
             ).count()
-            
+
             return {
                 'total_documents': total_docs,
                 'processed_documents': processed_docs,
@@ -417,7 +417,7 @@ class DocumentProcessorService:
                 'categories': {cat: count for cat, count in category_stats},
                 'processing_rate': round((processed_docs / total_docs * 100), 2) if total_docs > 0 else 0
             }
-            
+
         except Exception as e:
             self._log_error(f"Erro nas estatísticas: {str(e)}", user_id)
             return {
@@ -428,7 +428,7 @@ class DocumentProcessorService:
                 'categories': {},
                 'processing_rate': 0
             }
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Verificar saúde do sistema de processamento
@@ -440,7 +440,7 @@ class DocumentProcessorService:
             # Verificar diretório de upload
             upload_dir_exists = os.path.exists(self.upload_dir)
             upload_dir_writable = os.access(self.upload_dir, os.W_OK) if upload_dir_exists else False
-            
+
             # Verificar bibliotecas de processamento
             libraries_available = {
                 'PyPDF2': PyPDF2 is not None,
@@ -448,10 +448,10 @@ class DocumentProcessorService:
                 'python-docx': DocxDocument is not None,
                 'textract': textract is not None
             }
-            
+
             # Espaço em disco disponível
             disk_usage = self._get_disk_usage()
-            
+
             return {
                 "status": "healthy" if upload_dir_exists and upload_dir_writable else "unhealthy",
                 "upload_directory": {
@@ -469,36 +469,36 @@ class DocumentProcessorService:
                 },
                 "last_check": datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
                 "error": str(e),
                 "last_check": datetime.utcnow().isoformat()
             }
-    
+
     # Métodos privados auxiliares
-    
+
     def _validate_file(self, file: BinaryIO, filename: str) -> Optional[str]:
         """Validar arquivo enviado"""
         # Verificar extensão
         file_extension = Path(filename).suffix.lower()
         if file_extension not in self.allowed_extensions:
             return f"Tipo de arquivo não suportado. Permitidos: {', '.join(self.allowed_extensions)}"
-        
+
         # Verificar tamanho
         file.seek(0, 2)  # Ir para o final do arquivo
         file_size = file.tell()
         file.seek(0)  # Voltar ao início
-        
+
         if file_size > self.max_file_size:
             return f"Arquivo muito grande. Máximo: {self.max_file_size / (1024 * 1024):.1f}MB"
-        
+
         if file_size == 0:
             return "Arquivo está vazio"
-        
+
         return None
-    
+
     def _extract_content(self, file_path: str, file_extension: str) -> str:
         """Extrair conteúdo do arquivo"""
         try:
@@ -512,11 +512,11 @@ class DocumentProcessorService:
                 return self._extract_rtf(file_path)
             else:
                 return ""
-                
+
         except Exception as e:
             self._log_error(f"Erro na extração de conteúdo: {str(e)}")
             return ""
-    
+
     def _extract_txt(self, file_path: str) -> str:
         """Extrair conteúdo de arquivo TXT"""
         try:
@@ -531,11 +531,11 @@ class DocumentProcessorService:
                 except UnicodeDecodeError:
                     continue
             return ""
-    
+
     def _extract_pdf(self, file_path: str) -> str:
         """Extrair conteúdo de arquivo PDF"""
         content = ""
-        
+
         # Tentar com pdfplumber primeiro (melhor para tabelas)
         if pdfplumber:
             try:
@@ -548,7 +548,7 @@ class DocumentProcessorService:
                     return content
             except:
                 pass
-        
+
         # Fallback para PyPDF2
         if PyPDF2:
             try:
@@ -562,7 +562,7 @@ class DocumentProcessorService:
                     return content
             except:
                 pass
-        
+
         # Fallback para textract
         if textract:
             try:
@@ -570,9 +570,9 @@ class DocumentProcessorService:
                 return content
             except:
                 pass
-        
+
         return content
-    
+
     def _extract_doc(self, file_path: str) -> str:
         """Extrair conteúdo de arquivo DOC/DOCX"""
         # Tentar com python-docx para DOCX
@@ -585,7 +585,7 @@ class DocumentProcessorService:
                 return '\n'.join(content)
             except:
                 pass
-        
+
         # Fallback para textract
         if textract:
             try:
@@ -593,9 +593,9 @@ class DocumentProcessorService:
                 return content
             except:
                 pass
-        
+
         return ""
-    
+
     def _extract_rtf(self, file_path: str) -> str:
         """Extrair conteúdo de arquivo RTF"""
         if textract:
@@ -604,23 +604,23 @@ class DocumentProcessorService:
                 return content
             except:
                 pass
-        
+
         return ""
-    
+
     def _create_chunks(self, content: str) -> List[DocumentChunk]:
         """Criar chunks do conteúdo para indexação"""
         chunks = []
-        
+
         if not content:
             return chunks
-        
+
         # Dividir em chunks com sobreposição
         start = 0
         chunk_index = 0
-        
+
         while start < len(content):
             end = start + self.chunk_size
-            
+
             # Se não é o último chunk, tentar quebrar em uma palavra
             if end < len(content):
                 # Procurar por espaço ou quebra de linha próxima
@@ -628,9 +628,9 @@ class DocumentProcessorService:
                     if content[i] in [' ', '\n', '\t', '.', '!', '?']:
                         end = i + 1
                         break
-            
+
             chunk_content = content[start:end].strip()
-            
+
             if chunk_content:
                 chunk = DocumentChunk(
                     content=chunk_content,
@@ -644,26 +644,26 @@ class DocumentProcessorService:
                 )
                 chunks.append(chunk)
                 chunk_index += 1
-            
+
             # Próximo chunk com sobreposição
             start = end - self.chunk_overlap
-            
+
             # Evitar loop infinito
             if start >= end:
                 break
-        
+
         return chunks
-    
+
     def _get_disk_usage(self) -> Dict[str, Any]:
         """Obter uso do disco"""
         try:
             import shutil
             total, used, free = shutil.disk_usage(self.upload_dir)
-            
+
             return {
-                'total_gb': round(total / (1024**3), 2),
-                'used_gb': round(used / (1024**3), 2),
-                'free_gb': round(free / (1024**3), 2),
+                'total_gb': round(total / (1024 ** 3), 2),
+                'used_gb': round(used / (1024 ** 3), 2),
+                'free_gb': round(free / (1024 ** 3), 2),
                 'usage_percent': round((used / total) * 100, 2)
             }
         except:
@@ -673,7 +673,7 @@ class DocumentProcessorService:
                 'free_gb': 0,
                 'usage_percent': 0
             }
-    
+
     def _log_error(self, error_msg: str, user_id: int = None):
         """Log de erro"""
         try:
@@ -688,6 +688,6 @@ class DocumentProcessorService:
         except:
             print(f"[ERROR] DocumentProcessorService: {error_msg}")
 
+
 # Instância global do service
 document_processor_service = DocumentProcessorService()
-

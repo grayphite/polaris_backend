@@ -19,18 +19,18 @@ Services implementados:
 - BackupService: Backup e recuperação de dados
 """
 
-from .claude_ai_service import ClaudeAIService
 from .auth_service import AuthService
-from .document_processor_service import DocumentProcessorService
-from .cliente_service import ClienteService
-from .mcp_service import MCPService
-from .search_service import SearchService
-from .pdf_generator_service import PDFGeneratorService
-from .legal_scraping_service import LegalScrapingService
-from .cache_service import CacheService
-from .logging_service import LoggingService
-from .email_service import EmailService
 from .backup_service import BackupService
+from .cache_service import CacheService
+from .claude_ai_service import ClaudeAIService
+from .cliente_service import ClienteService
+from .document_processor_service import DocumentProcessorService
+from .email_service import EmailService
+from .legal_scraping_service import LegalScrapingService
+from .logging_service import LoggingService
+from .mcp_service import MCPService
+from .pdf_generator_service import PDFGeneratorService
+from .search_service import SearchService
 
 # Instâncias globais dos services (Singleton pattern)
 claude_ai_service = ClaudeAIService()
@@ -48,7 +48,7 @@ backup_service = BackupService()
 
 __all__ = [
     'ClaudeAIService',
-    'AuthService', 
+    'AuthService',
     'DocumentProcessorService',
     'ClienteService',
     'MCPService',
@@ -73,4 +73,3 @@ __all__ = [
     'email_service',
     'backup_service'
 ]
-

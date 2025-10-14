@@ -5,22 +5,23 @@ Extensão das rotas AI existentes com capacidades RAG otimizadas.
 Mantém compatibilidade com rotas originais.
 """
 
-from flask import Blueprint, request, jsonify
-from functools import wraps
-from typing import Dict, Any
 import time
+from functools import wraps
+
+from flask import Blueprint, request, jsonify
 
 # Imports seguros do sistema existente
 try:
     from src.services.auth_service import auth_service, require_auth
     from src.services.logging_service import logging_service, LogLevel, ActionType, log_action
     from src.services.cache_service import cache_service
+
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False
-    
+
 # Import do middleware RAG-Claude
-from src.services.rag_claude_middleware import get_rag_claude_middleware, smart_chat
+from src.services.rag_claude_middleware import get_rag_claude_middleware
 
 # Blueprint para rotas enhanced
 enhanced_ai_bp = Blueprint('enhanced_ai', __name__)
@@ -28,27 +29,28 @@ enhanced_ai_bp = Blueprint('enhanced_ai', __name__)
 
 def validate_enhanced_ai_request(func):
     """Decorador para validação de requisições AI enhanced"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             data = request.get_json()
-            
+
             if not data:
                 return jsonify({'error': 'Dados não fornecidos'}), 400
-            
+
             # Validar prompt
             if 'prompt' not in data or not data['prompt'].strip():
                 return jsonify({'error': 'Prompt é obrigatório'}), 400
-            
+
             # Limitar tamanho do prompt
             if len(data['prompt']) > 15000:  # Maior limite para RAG
                 return jsonify({
                     'error': 'Prompt muito longo (máximo 15.000 caracteres)'
                 }), 400
-            
+
             request.validated_data = data
             return func(*args, **kwargs)
-            
+
         except Exception as e:
             if AUTH_AVAILABLE:
                 logging_service.error(
@@ -57,12 +59,13 @@ def validate_enhanced_ai_request(func):
                     f"Erro na validação: {str(e)}"
                 )
             return jsonify({'error': 'Erro interno de validação'}), 500
-    
+
     return wrapper
 
 
 def handle_enhanced_ai_errors(func):
     """Decorador para tratamento de erros em rotas AI enhanced"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -78,7 +81,7 @@ def handle_enhanced_ai_errors(func):
                 'error': 'Erro interno do servidor',
                 'message': 'Tente novamente em alguns momentos'
             }), 500
-    
+
     return wrapper
 
 
@@ -111,42 +114,42 @@ def smart_chat_route():
     }
     """
     start_time = time.time()
-    
+
     # Obter usuário atual se auth disponível
     current_user = None
     user_id = None
     if AUTH_AVAILABLE:
         current_user = auth_service.get_current_user()
         user_id = current_user.id if current_user else None
-    
+
     data = request.validated_data
     prompt = data['prompt']
     use_rag = data.get('use_rag', True)
     use_cache = data.get('use_cache', True)
     rag_mode = data.get('rag_mode', 'auto')
-    
+
     # Ajustar use_rag baseado no rag_mode
     if rag_mode == 'force':
         use_rag = True
     elif rag_mode == 'disable':
         use_rag = False
     # rag_mode == 'auto' mantém use_rag original
-    
+
     # Rate limiting se auth disponível
     if AUTH_AVAILABLE and current_user and cache_service:
         rate_limit_key = f"enhanced_ai_rate_limit_{user_id}"
         current_requests = cache_service.get(rate_limit_key) or 0
-        
+
         if current_requests >= 100:  # 100 requests por hora para RAG
             return jsonify({
                 'error': 'Limite de requisições excedido',
                 'retry_after': 3600,
                 'limit': 100
             }), 429
-        
+
         # Incrementar contador
         cache_service.set(rate_limit_key, current_requests + 1, ttl=3600)
-    
+
     # Processar chat via middleware
     middleware = get_rag_claude_middleware()
     response = middleware.chat(
@@ -155,11 +158,11 @@ def smart_chat_route():
         use_rag=use_rag,
         use_cache=use_cache
     )
-    
+
     # Adicionar tempo de processamento
     processing_time = time.time() - start_time
     response['processing_time'] = round(processing_time, 3)
-    
+
     # Log da interação se disponível
     if AUTH_AVAILABLE and current_user:
         logging_service.info(
@@ -176,10 +179,10 @@ def smart_chat_route():
                 'rag_chunks': response.get('rag_chunks', 0)
             }
         )
-    
+
     # Determinar status code
     status_code = 200 if response.get('success', False) else 500
-    
+
     return jsonify(response), status_code
 
 
@@ -199,19 +202,19 @@ def rag_chat_route():
     }
     """
     start_time = time.time()
-    
+
     # Obter usuário atual
     current_user = None
     user_id = None
     if AUTH_AVAILABLE:
         current_user = auth_service.get_current_user()
         user_id = current_user.id if current_user else None
-    
+
     data = request.validated_data
     prompt = data['prompt']
     max_chunks = data.get('max_chunks', 5)
     similarity_threshold = data.get('similarity_threshold', 0.6)
-    
+
     # Verificar se RAG está disponível
     middleware = get_rag_claude_middleware()
     if not middleware.rag_enabled:
@@ -220,7 +223,7 @@ def rag_chat_route():
             'message': 'Para usar esta funcionalidade, instale: pip install -r requirements_rag.txt',
             'fallback_available': middleware.claude_enabled
         }), 503
-    
+
     # Processar com RAG obrigatório
     response = middleware.chat(
         prompt=prompt,
@@ -228,15 +231,15 @@ def rag_chat_route():
         use_rag=True,
         use_cache=True
     )
-    
+
     # Se RAG falhou mas Claude disponível, informar
     if not response.get('success', False) and middleware.claude_enabled:
         response['fallback_suggestion'] = 'Use /chat-smart para fallback automático'
-    
+
     # Adicionar tempo de processamento
     processing_time = time.time() - start_time
     response['processing_time'] = round(processing_time, 3)
-    
+
     # Log da interação
     if AUTH_AVAILABLE and current_user:
         logging_service.info(
@@ -252,7 +255,7 @@ def rag_chat_route():
                 'processing_time': processing_time
             }
         )
-    
+
     status_code = 200 if response.get('success', False) else 500
     return jsonify(response), status_code
 
@@ -272,14 +275,14 @@ def fallback_chat_route():
     """
     data = request.validated_data
     prompt = data['prompt']
-    
+
     # Chat com fallback garantido
     middleware = get_rag_claude_middleware()
     response = middleware.chat_with_fallback(
         prompt=prompt,
         user_id=None
     )
-    
+
     return jsonify(response)
 
 
@@ -299,7 +302,7 @@ def enhanced_ai_status():
     """
     middleware = get_rag_claude_middleware()
     status = middleware.get_status()
-    
+
     return jsonify(status)
 
 
@@ -326,7 +329,7 @@ def models_info():
             'ttl_minutes': 30
         }
     }
-    
+
     return jsonify(info)
 
 
@@ -336,7 +339,7 @@ def usage_tips():
     Dicas de uso do sistema enhanced
     """
     middleware = get_rag_claude_middleware()
-    
+
     tips = {
         'endpoints': {
             '/chat-smart': {
@@ -360,23 +363,23 @@ def usage_tips():
             'recommendations': []
         }
     }
-    
+
     # Recomendações baseadas no status
     if not middleware.rag_enabled:
         tips['system_status']['recommendations'].append(
             'Para ativar RAG: pip install -r requirements_rag.txt'
         )
-    
+
     if not middleware.cache_enabled:
         tips['system_status']['recommendations'].append(
             'Para melhor performance, configure Redis cache'
         )
-    
+
     if middleware.rag_enabled and middleware.cache_enabled:
         tips['system_status']['recommendations'].append(
             'Sistema otimizado! Use /chat-smart para melhor experiência'
         )
-    
+
     return jsonify(tips)
 
 
@@ -389,7 +392,7 @@ def register_enhanced_ai_routes(app):
         app: Instância Flask
     """
     app.register_blueprint(enhanced_ai_bp, url_prefix='/api/v1/enhanced-ai')
-    
+
     # Log de inicialização
     if AUTH_AVAILABLE:
         logging_service.info(
