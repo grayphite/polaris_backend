@@ -109,3 +109,58 @@ def delete_user(user_id):
     db.session.delete(user)
     db.session.commit()
     return '', 204
+
+
+@user_bp.route('/users/forget-password', methods=['POST'])
+def forget_password():
+    data = request.json
+    email = data.get('email')
+    if not email:
+        return jsonify({'error': 'Email é obrigatório'}), 400
+
+    result = auth_service.reset_password_request(email)
+
+    if result.success:
+        return jsonify({'success': True, 'message': result.message}), 200
+    else:
+        return jsonify({'error': result.error}), 400
+
+
+@user_bp.route('/users/reset-password', methods=['POST'])
+def reset_password():
+    data = request.json
+    token = data.get("token")
+    password_text = data.get("senha")
+
+    if not token or not password_text:
+        return jsonify(
+            {'success': False, 'message': 'Token e senha são obrigatórios'}
+        ), 400
+
+    result = auth_service.reset_password(token, password_text)
+
+    if result.success:
+        return jsonify({'success': True, 'message': result.message}), 200
+    else:
+        return jsonify({'error': result.error}), 400
+
+
+@user_bp.route('/users/change-password', methods=['POST'])
+@auth_service.require_auth
+def change_user_password():
+    data = request.json
+    user = request.current_user
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
+
+    if not user or not current_password or not new_password:
+        return jsonify(
+            {'success': False, 'message': 'Senha atual e nova senha são obrigatórias'}
+        ), 400
+
+    result = auth_service.change_password(user.id, current_password, new_password)
+
+    if result.success:
+        return jsonify({'success': True, 'message': result.message}), 200
+    else:
+        return jsonify({'error': result.error}), 400

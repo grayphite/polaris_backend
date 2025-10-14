@@ -195,7 +195,48 @@ Equipe POLARIS
         )
         
         return self.send_email(message)
-    
+
+    def send_reset_password_email(
+            self, user_email: str, reset_link: str
+    ) -> Dict:
+        """Envia email para redefinição de senha"""
+
+        subject = "Redefinição de Senha POLARIS"
+        text_content = f"""
+Olá,
+Recebemos uma solicitação para redefinir sua senha do POLARIS.
+Para redefinir sua senha, clique no link abaixo:
+{reset_link}
+Se você não solicitou essa alteração, ignore este email.
+Atenciosamente,
+Equipe POLARIS
+"""
+
+        html_content = f"""
+<html>
+<body style="font-family: Arial, sans-serif; color: #333;">
+    <h2 style="color: #2c5282;">Redefinição de Senha POLARIS</h2>
+    <p>Olá,</p>
+    <p>Recebemos uma solicitação para redefinir sua senha do POLARIS.</p>
+    <p>Para redefinir sua senha, clique no link abaixo:</p>
+    <p><a href="{reset_link}" style="color: #3182ce;">Redefinir Senha</a></p>
+    <p>Se você não solicitou essa alteração, ignore este email.</p>
+    <p>Atenciosamente,<br>
+    <strong>Equipe POLARIS</strong></p>
+</body>
+</html>
+"""
+
+        message = EmailMessage(
+            to=user_email,
+            subject=subject,
+            text_content=text_content,
+            html_content=html_content
+        )
+
+        return self.send_email(message)
+
+
     def send_document_notification(self, user_email: str,
                                  document_name: str) -> Dict:
         """Envia notificação de documento gerado"""
