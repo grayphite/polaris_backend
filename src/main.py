@@ -21,6 +21,8 @@ from src.models import *  # noqa: F401
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+CORS_ALLOWED_ORIGINS = os.getenv('CORS_ORIGINS', '*').split(',')
+
 
 def create_app():
     app = Flask(__name__, static_folder='static')
@@ -33,7 +35,7 @@ def create_app():
     db.init_app(app)
     cors.init_app(
         app,
-        origins=['*'],
+        origins=CORS_ALLOWED_ORIGINS,
         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
     )
 
