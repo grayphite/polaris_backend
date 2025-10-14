@@ -24,9 +24,8 @@ def register_user():
             return jsonify({'error': 'Email e senha são obrigatórios'}), 400
 
         # Registrar usuário via AuthService
-        nome_completo = data.get('nome', '')
-        first_name = nome_completo.split(' ')[0] if nome_completo else ''
-        last_name = ' '.join(nome_completo.split(' ')[1:]) if len(nome_completo.split(' ')) > 1 else ''
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
 
         result = auth_service.register_user(
             username=data['email'],  # Usar email como username
@@ -97,6 +96,8 @@ def get_user(user_id):
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
     data = request.json
+    user.first_name = data.get("first_name", user.first_name)
+    user.last_name = data.get("last_name", user.last_name)
     user.username = data.get('username', user.username)
     user.email = data.get('email', user.email)
     db.session.commit()
