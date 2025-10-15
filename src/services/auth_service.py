@@ -633,15 +633,23 @@ def require_auth(f):
         if not auth_header or not auth_header.startswith('Bearer '):
             return jsonify({'error': 'Token de acesso requerido'}), 401
 
-        token = auth_header.split(' ')[1]
+        try:
+            token = auth_header.split(' ')[1]
+        except IndexError:
+            return jsonify({'error': 'Formato de token inválido'}), 401
 
         # Validar token
         validation_result = auth_service.validate_token(token)
         if not validation_result.is_valid:
             return jsonify({'error': 'Token inválido ou expirado'}), 401
 
-        # Adicionar dados do usuário ao request
-        request.current_user = validation_result.user
+        # Buscar usuário
+        user = User.query.get(validation_result.user_id)
+        if not user:
+            return jsonify({'error': 'Usuário não encontrado'}), 401
+
+        # Adicionar usuário ao Flask g object
+        g.current_user = user
 
         return f(*args, **kwargs)
 
