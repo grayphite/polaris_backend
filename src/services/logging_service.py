@@ -267,7 +267,7 @@ class LoggingService:
                 session_id=session_id,
                 success=success,
                 error_message=error_message,
-                metadata=metadata or {}
+                audit_metadata=metadata or {}
             )
 
             db.session.add(audit_log)

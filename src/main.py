@@ -41,6 +41,7 @@ def create_app():
 
     # Import blueprints
     from src.routes.user import user_bp
+    from src.routes.project import project_bp
     # Skipping for now as not being used
     # from src.routes.cliente import cliente_bp
     # from src.routes.ai import ai_bp
@@ -49,6 +50,7 @@ def create_app():
 
     # Register blueprints
     app.register_blueprint(user_bp, url_prefix='/api')
+    app.register_blueprint(project_bp, url_prefix='/api')
     # Skipping for now as not being used
     # app.register_blueprint(cliente_bp, url_prefix='/api')
     # app.register_blueprint(ai_bp, url_prefix='/api')
