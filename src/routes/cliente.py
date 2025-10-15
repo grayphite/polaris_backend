@@ -5,15 +5,14 @@ Esta versão refatorada usa o ClienteService para lógica de negócio,
 decoradores para logging/auth e validação centralizada.
 """
 
-from flask import Blueprint, request, jsonify
 from functools import wraps
-from typing import Dict, Any, Optional
 
-from src.services.cliente_service import cliente_service
+from flask import Blueprint, request, jsonify
+
 from src.services.auth_service import auth_service, require_auth
-from src.services.logging_service import logging_service, LogLevel, ActionType, log_action
 from src.services.cache_service import cache_service
-
+from src.services.cliente_service import cliente_service
+from src.services.logging_service import logging_service, ActionType, log_action
 
 cliente_bp = Blueprint('cliente', __name__)
 
@@ -26,12 +25,13 @@ def validate_request_data(required_fields: list = None, optional_fields: list = 
         required_fields: Lista de campos obrigatórios
         optional_fields: Lista de campos opcionais permitidos
     """
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             try:
                 data = request.get_json() if request.method in ['POST', 'PUT'] else {}
-                
+
                 # Validar campos obrigatórios
                 if required_fields:
                     for field in required_fields:
@@ -40,7 +40,7 @@ def validate_request_data(required_fields: list = None, optional_fields: list = 
                                 'error': f'Campo {field} é obrigatório',
                                 'field': field
                             }), 400
-                
+
                 # Filtrar apenas campos permitidos
                 if optional_fields:
                     allowed_fields = (required_fields or []) + optional_fields
@@ -48,9 +48,9 @@ def validate_request_data(required_fields: list = None, optional_fields: list = 
                     request.validated_data = filtered_data
                 else:
                     request.validated_data = data
-                
+
                 return func(*args, **kwargs)
-                
+
             except Exception as e:
                 logging_service.error(
                     "ClienteRoutes",
@@ -59,13 +59,15 @@ def validate_request_data(required_fields: list = None, optional_fields: list = 
                     error_details={'error': str(e)}
                 )
                 return jsonify({'error': 'Erro na validação dos dados'}), 400
-        
+
         return wrapper
+
     return decorator
 
 
 def handle_errors(func):
     """Decorador para tratamento centralizado de erros"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -99,7 +101,7 @@ def handle_errors(func):
                 error_details={'error': str(e)}
             )
             return jsonify({'error': 'Erro interno do servidor'}), 500
-    
+
     return wrapper
 
 
@@ -118,16 +120,16 @@ def get_clientes():
     """
     # Obter usuário autenticado
     current_user = auth_service.get_current_user()
-    
+
     # Parâmetros de consulta
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 10, type=int), 100)
     search = request.args.get('search', '').strip()
-    
+
     # Verificar cache
     cache_key = f"clientes_list_{current_user.id}_{page}_{per_page}_{search}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         logging_service.debug(
             "ClienteRoutes",
@@ -135,7 +137,7 @@ def get_clientes():
             f"Resultado obtido do cache para usuário {current_user.id}"
         )
         return jsonify(cached_result)
-    
+
     # Buscar clientes via service
     result = cliente_service.list_clientes(
         user_id=current_user.id,
@@ -143,10 +145,10 @@ def get_clientes():
         per_page=per_page,
         search=search
     )
-    
+
     # Cache por 5 minutos
     cache_service.set(cache_key, result, ttl=300)
-    
+
     logging_service.info(
         "ClienteRoutes",
         "GET_CLIENTES",
@@ -159,7 +161,7 @@ def get_clientes():
             'total_found': result.get('pagination', {}).get('total', 0)
         }
     )
-    
+
     return jsonify(result)
 
 
@@ -170,26 +172,26 @@ def get_clientes():
 def get_cliente(cliente_id: int):
     """Obter cliente específico por ID"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = f"cliente_{cliente_id}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Buscar cliente via service
     cliente = cliente_service.get_cliente_by_id(
         cliente_id=cliente_id,
         user_id=current_user.id
     )
-    
+
     if not cliente:
         raise FileNotFoundError("Cliente não encontrado")
-    
+
     # Cache por 10 minutos
     cache_service.set(cache_key, cliente, ttl=600)
-    
+
     logging_service.info(
         "ClienteRoutes",
         "GET_CLIENTE",
@@ -197,7 +199,7 @@ def get_cliente(cliente_id: int):
         user_id=current_user.id,
         metadata={'cliente_id': cliente_id}
     )
-    
+
     return jsonify(cliente)
 
 
@@ -207,11 +209,11 @@ def get_cliente(cliente_id: int):
     required_fields=['nome_completo', 'email'],
     optional_fields=[
         'telefone', 'nacionalidade', 'cpf', 'passaporte', 'rg',
-        'data_nascimento', 'endereco_completo', 'cidade', 'estado', 
-        'cep', 'pais', 'profissao', 'empresa', 'cargo', 'renda_anual', 
-        'patrimonio_total', 'origem_patrimonio', 'residente_fiscal_brasil', 
-        'residente_fiscal_eua', 'outros_paises_residencia', 'objetivos_planejamento', 
-        'tolerancia_risco', 'horizonte_investimento', 'possui_offshore', 
+        'data_nascimento', 'endereco_completo', 'cidade', 'estado',
+        'cep', 'pais', 'profissao', 'empresa', 'cargo', 'renda_anual',
+        'patrimonio_total', 'origem_patrimonio', 'residente_fiscal_brasil',
+        'residente_fiscal_eua', 'outros_paises_residencia', 'objetivos_planejamento',
+        'tolerancia_risco', 'horizonte_investimento', 'possui_offshore',
         'detalhes_offshore', 'possui_trust', 'detalhes_trust'
     ]
 )
@@ -221,17 +223,17 @@ def create_cliente():
     """Criar novo cliente"""
     current_user = auth_service.get_current_user()
     data = request.validated_data
-    
+
     # Adicionar user_id aos dados
     data['user_id'] = current_user.id
-    
+
     # Criar cliente via service
     cliente = cliente_service.create_cliente(data)
-    
+
     # Invalidar cache de listagem
     cache_pattern = f"clientes_list_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log de auditoria
     logging_service.audit(
         user_id=current_user.id,
@@ -243,7 +245,7 @@ def create_cliente():
         user_agent=request.headers.get('User-Agent'),
         metadata={'cliente_nome': cliente['nome_completo']}
     )
-    
+
     logging_service.info(
         "ClienteRoutes",
         "CREATE_CLIENTE",
@@ -251,7 +253,7 @@ def create_cliente():
         user_id=current_user.id,
         metadata={'cliente_id': cliente['id'], 'cliente_nome': cliente['nome_completo']}
     )
-    
+
     return jsonify(cliente), 201
 
 
@@ -259,12 +261,12 @@ def create_cliente():
 @require_auth
 @validate_request_data(
     optional_fields=[
-        'nome_completo', 'email', 'telefone', 'nacionalidade', 'cpf', 
-        'passaporte', 'rg', 'data_nascimento', 'endereco_completo', 'cidade', 
-        'estado', 'cep', 'pais', 'profissao', 'empresa', 'cargo', 'renda_anual', 
-        'patrimonio_total', 'origem_patrimonio', 'residente_fiscal_brasil', 
-        'residente_fiscal_eua', 'outros_paises_residencia', 'objetivos_planejamento', 
-        'tolerancia_risco', 'horizonte_investimento', 'possui_offshore', 
+        'nome_completo', 'email', 'telefone', 'nacionalidade', 'cpf',
+        'passaporte', 'rg', 'data_nascimento', 'endereco_completo', 'cidade',
+        'estado', 'cep', 'pais', 'profissao', 'empresa', 'cargo', 'renda_anual',
+        'patrimonio_total', 'origem_patrimonio', 'residente_fiscal_brasil',
+        'residente_fiscal_eua', 'outros_paises_residencia', 'objetivos_planejamento',
+        'tolerancia_risco', 'horizonte_investimento', 'possui_offshore',
         'detalhes_offshore', 'possui_trust', 'detalhes_trust'
     ]
 )
@@ -274,24 +276,24 @@ def update_cliente(cliente_id: int):
     """Atualizar cliente existente"""
     current_user = auth_service.get_current_user()
     data = request.validated_data
-    
+
     # Obter valores antigos para auditoria
     old_cliente = cliente_service.get_cliente_by_id(cliente_id, current_user.id)
     if not old_cliente:
         raise FileNotFoundError("Cliente não encontrado")
-    
+
     # Atualizar cliente via service
     updated_cliente = cliente_service.update_cliente(
         cliente_id=cliente_id,
         user_id=current_user.id,
         data=data
     )
-    
+
     # Invalidar caches
     cache_service.delete(f"cliente_{cliente_id}_{current_user.id}")
     cache_pattern = f"clientes_list_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log de auditoria
     logging_service.audit(
         user_id=current_user.id,
@@ -304,7 +306,7 @@ def update_cliente(cliente_id: int):
         user_agent=request.headers.get('User-Agent'),
         metadata={'cliente_nome': updated_cliente['nome_completo']}
     )
-    
+
     logging_service.info(
         "ClienteRoutes",
         "UPDATE_CLIENTE",
@@ -312,7 +314,7 @@ def update_cliente(cliente_id: int):
         user_id=current_user.id,
         metadata={'cliente_id': cliente_id, 'fields_updated': list(data.keys())}
     )
-    
+
     return jsonify(updated_cliente)
 
 
@@ -323,26 +325,26 @@ def update_cliente(cliente_id: int):
 def delete_cliente(cliente_id: int):
     """Excluir cliente (soft delete)"""
     current_user = auth_service.get_current_user()
-    
+
     # Obter cliente para auditoria
     cliente = cliente_service.get_cliente_by_id(cliente_id, current_user.id)
     if not cliente:
         raise FileNotFoundError("Cliente não encontrado")
-    
+
     # Excluir via service
     success = cliente_service.delete_cliente(
         cliente_id=cliente_id,
         user_id=current_user.id
     )
-    
+
     if not success:
         raise Exception("Erro ao excluir cliente")
-    
+
     # Invalidar caches
     cache_service.delete(f"cliente_{cliente_id}_{current_user.id}")
     cache_pattern = f"clientes_list_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log de auditoria
     logging_service.audit(
         user_id=current_user.id,
@@ -354,7 +356,7 @@ def delete_cliente(cliente_id: int):
         user_agent=request.headers.get('User-Agent'),
         metadata={'cliente_nome': cliente['nome_completo']}
     )
-    
+
     logging_service.info(
         "ClienteRoutes",
         "DELETE_CLIENTE",
@@ -362,7 +364,7 @@ def delete_cliente(cliente_id: int):
         user_id=current_user.id,
         metadata={'cliente_id': cliente_id, 'cliente_nome': cliente['nome_completo']}
     )
-    
+
     return jsonify({'message': 'Cliente excluído com sucesso'})
 
 
@@ -373,21 +375,21 @@ def delete_cliente(cliente_id: int):
 def restore_cliente(cliente_id: int):
     """Restaurar cliente excluído"""
     current_user = auth_service.get_current_user()
-    
+
     # Restaurar via service
     cliente = cliente_service.restore_cliente(
         cliente_id=cliente_id,
         user_id=current_user.id
     )
-    
+
     if not cliente:
         raise FileNotFoundError("Cliente não encontrado ou já está ativo")
-    
+
     # Invalidar caches
     cache_service.delete(f"cliente_{cliente_id}_{current_user.id}")
     cache_pattern = f"clientes_list_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log de auditoria
     logging_service.audit(
         user_id=current_user.id,
@@ -399,7 +401,7 @@ def restore_cliente(cliente_id: int):
         user_agent=request.headers.get('User-Agent'),
         metadata={'cliente_nome': cliente['nome_completo'], 'action': 'restore'}
     )
-    
+
     logging_service.info(
         "ClienteRoutes",
         "RESTORE_CLIENTE",
@@ -407,7 +409,7 @@ def restore_cliente(cliente_id: int):
         user_id=current_user.id,
         metadata={'cliente_id': cliente_id, 'cliente_nome': cliente['nome_completo']}
     )
-    
+
     return jsonify(cliente)
 
 
@@ -418,20 +420,20 @@ def restore_cliente(cliente_id: int):
 def get_clientes_stats():
     """Obter estatísticas dos clientes"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = f"clientes_stats_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter estatísticas via service
     stats = cliente_service.get_clientes_statistics(current_user.id)
-    
+
     # Cache por 15 minutos
     cache_service.set(cache_key, stats, ttl=900)
-    
+
     logging_service.info(
         "ClienteRoutes",
         "GET_STATS",
@@ -439,7 +441,7 @@ def get_clientes_stats():
         user_id=current_user.id,
         metadata={'total_clientes': stats.get('total_clientes', 0)}
     )
-    
+
     return jsonify(stats)
 
 
@@ -451,16 +453,16 @@ def export_clientes():
     """Exportar clientes para CSV/Excel"""
     current_user = auth_service.get_current_user()
     format_type = request.args.get('format', 'csv').lower()
-    
+
     if format_type not in ['csv', 'excel']:
         raise ValueError("Formato deve ser 'csv' ou 'excel'")
-    
+
     # Exportar via service
     file_path = cliente_service.export_clientes(
         user_id=current_user.id,
         format_type=format_type
     )
-    
+
     logging_service.info(
         "ClienteRoutes",
         "EXPORT_CLIENTES",
@@ -468,7 +470,7 @@ def export_clientes():
         user_id=current_user.id,
         metadata={'format': format_type, 'file_path': file_path}
     )
-    
+
     return jsonify({
         'message': 'Exportação concluída',
         'download_url': f'/api/clientes/download/{file_path.split("/")[-1]}',
@@ -483,24 +485,24 @@ def export_clientes():
 def import_clientes():
     """Importar clientes de arquivo CSV/Excel"""
     current_user = auth_service.get_current_user()
-    
+
     if 'file' not in request.files:
         raise ValueError("Arquivo não fornecido")
-    
+
     file = request.files['file']
     if file.filename == '':
         raise ValueError("Nome do arquivo vazio")
-    
+
     # Importar via service
     result = cliente_service.import_clientes(
         user_id=current_user.id,
         file=file
     )
-    
+
     # Invalidar cache de listagem
     cache_pattern = f"clientes_list_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     logging_service.info(
         "ClienteRoutes",
         "IMPORT_CLIENTES",
@@ -511,7 +513,7 @@ def import_clientes():
             'failed_count': result.get('failed_count', 0)
         }
     )
-    
+
     return jsonify(result)
 
 
@@ -522,14 +524,14 @@ def health_check():
     try:
         # Verificar service
         health_status = cliente_service.health_check()
-        
+
         return jsonify({
             'status': 'healthy',
             'service': 'cliente',
             'timestamp': health_status.get('timestamp'),
             'details': health_status
         })
-        
+
     except Exception as e:
         logging_service.error(
             "ClienteRoutes",
@@ -541,4 +543,3 @@ def health_check():
             'service': 'cliente',
             'error': str(e)
         }), 500
-

@@ -1,16 +1,10 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 
+from src.extensions import db
 from src.models.user import User
 from src.services.auth_service import auth_service
-from src.database import db
 
 user_bp = Blueprint('user', __name__)
-
-
-@user_bp.route('/users', methods=['GET'])
-def get_users():
-    users = User.query.all()
-    return jsonify([user.to_dict() for user in users])
 
 
 @user_bp.route('/users/register', methods=['POST'])
@@ -77,34 +71,46 @@ def login_user():
         return jsonify({'error': str(e)}), 500
 
 
-@user_bp.route('/users', methods=['POST'])
-def create_user():
-    data = request.json
-    user = User(username=data['username'], email=data['email'])
-    db.session.add(user)
-    db.session.commit()
-    return jsonify(user.to_dict()), 201
+# List User is in-active for now
+# @user_bp.route('/users', methods=['GET'])
+# @auth_service.require_auth
+# def get_users():
+#     users = User.query.all()
+#     return jsonify([user.to_dict() for user in users])
+
+
+# Create User is in-active for now
+# @user_bp.route('/users', methods=['POST'])
+# @auth_service.require_auth
+# def create_user():
+#     data = request.json
+#     user = User(username=data['username'], email=data['email'])
+#     db.session.add(user)
+#     db.session.commit()
+#     return jsonify(user.to_dict()), 201
 
 
 @user_bp.route('/users/<int:user_id>', methods=['GET'])
+@auth_service.require_auth
 def get_user(user_id):
     user = User.query.get_or_404(user_id)
     return jsonify(user.to_dict())
 
 
 @user_bp.route('/users/<int:user_id>', methods=['PUT'])
+@auth_service.require_auth
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
     data = request.json
     user.first_name = data.get("first_name", user.first_name)
     user.last_name = data.get("last_name", user.last_name)
     user.username = data.get('username', user.username)
-    user.email = data.get('email', user.email)
     db.session.commit()
     return jsonify(user.to_dict())
 
 
 @user_bp.route('/users/<int:user_id>', methods=['DELETE'])
+@auth_service.require_auth
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
     db.session.delete(user)
@@ -150,7 +156,7 @@ def reset_password():
 @auth_service.require_auth
 def change_user_password():
     data = request.json
-    user = request.current_user
+    user = g.current_user
     current_password = data.get("current_password")
     new_password = data.get("new_password")
 

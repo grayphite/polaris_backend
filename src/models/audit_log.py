@@ -2,13 +2,14 @@
 Modelos para auditoria e logging
 """
 from datetime import datetime
-from src.database import db
+
+from src.extensions import db
 
 
 class AuditLog(db.Model):
     """Modelo para logs de auditoria"""
     __tablename__ = 'audit_logs'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     action = db.Column(db.String(255), nullable=False)
@@ -17,7 +18,7 @@ class AuditLog(db.Model):
     ip_address = db.Column(db.String(45))
     user_agent = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,

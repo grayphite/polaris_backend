@@ -10,6 +10,7 @@ cssselect2==0.8.0
 distro==1.9.0
 Flask==3.1.1
 flask-cors==6.0.0
+Flask-Migrate==4.0.5
 Flask-SQLAlchemy==3.1.1
 fonttools==4.59.2
 greenlet==3.2.4

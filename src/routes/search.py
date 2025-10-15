@@ -5,33 +5,32 @@ Implementa endpoints para busca avançada, indexação
 e análise de conteúdo jurídico.
 """
 
-from flask import Blueprint, request, jsonify
 from functools import wraps
-from typing import Dict, Any, Optional, List
-import json
 
-from src.services.search_service import search_service
+from flask import Blueprint, request, jsonify
+
 from src.services.auth_service import auth_service, require_auth
-from src.services.logging_service import logging_service, LogLevel, ActionType, log_action
 from src.services.cache_service import cache_service
-
+from src.services.logging_service import logging_service, ActionType, log_action
+from src.services.search_service import search_service
 
 search_bp = Blueprint('search', __name__)
 
 
 def validate_search_request(func):
     """Decorador para validação de requisições de busca"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             data = request.get_json() if request.method == 'POST' else {}
-            
+
             # Para GET, usar query parameters
             if request.method == 'GET':
                 query = request.args.get('q', '').strip()
                 if not query:
                     return jsonify({'error': 'Parâmetro de busca "q" é obrigatório'}), 400
-                
+
                 request.search_query = query
                 request.search_filters = {
                     'category': request.args.get('category'),
@@ -41,26 +40,26 @@ def validate_search_request(func):
                     'source': request.args.get('source')
                 }
                 request.search_limit = min(int(request.args.get('limit', 10)), 50)
-                
+
             # Para POST, usar body
             else:
                 if not data or 'query' not in data:
                     return jsonify({'error': 'Query de busca é obrigatória'}), 400
-                
+
                 query = data['query'].strip()
                 if not query:
                     return jsonify({'error': 'Query de busca não pode estar vazia'}), 400
-                
+
                 request.search_query = query
                 request.search_filters = data.get('filters', {})
                 request.search_limit = min(data.get('limit', 10), 50)
-            
+
             # Validar tamanho da query
             if len(request.search_query) > 1000:
                 return jsonify({'error': 'Query muito longa (máximo 1000 caracteres)'}), 400
-            
+
             return func(*args, **kwargs)
-            
+
         except Exception as e:
             logging_service.error(
                 "SearchRoutes",
@@ -68,12 +67,13 @@ def validate_search_request(func):
                 f"Erro na validação: {str(e)}"
             )
             return jsonify({'error': 'Erro na validação da busca'}), 400
-    
+
     return wrapper
 
 
 def handle_search_errors(func):
     """Decorador para tratamento de erros específicos de busca"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -103,7 +103,7 @@ def handle_search_errors(func):
                 error_details={'error': str(e)}
             )
             return jsonify({'error': 'Erro interno do serviço de busca'}), 500
-    
+
     return wrapper
 
 
@@ -132,27 +132,27 @@ def semantic_search():
     }
     """
     current_user = auth_service.get_current_user()
-    
+
     query = request.search_query
     filters = request.search_filters.copy()
     limit = request.search_limit
-    
+
     # Parâmetros adicionais para POST
     include_content = False
     similarity_threshold = 0.5
-    
+
     if request.method == 'POST':
         data = request.get_json()
         include_content = data.get('include_content', False)
         similarity_threshold = data.get('similarity_threshold', 0.5)
-    
+
     # Adicionar filtro de usuário
     filters['user_id'] = current_user.id
-    
+
     # Verificar cache
     cache_key = f"semantic_search_{hash(query)}_{hash(str(filters))}_{limit}_{include_content}_{similarity_threshold}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         logging_service.debug(
             "SearchRoutes",
@@ -160,7 +160,7 @@ def semantic_search():
             f"Resultado obtido do cache para usuário {current_user.id}"
         )
         return jsonify(cached_result)
-    
+
     # Executar busca via service
     results = search_service.semantic_search(
         query=query,
@@ -169,10 +169,10 @@ def semantic_search():
         include_content=include_content,
         similarity_threshold=similarity_threshold
     )
-    
+
     # Cache por 10 minutos
     cache_service.set(cache_key, results, ttl=600)
-    
+
     # Log da busca
     logging_service.info(
         "SearchRoutes",
@@ -186,7 +186,7 @@ def semantic_search():
             'search_time_ms': results.get('search_time_ms', 0)
         }
     )
-    
+
     return jsonify(results)
 
 
@@ -202,31 +202,31 @@ def keyword_search():
     Similar à busca semântica, mas usa correspondência exata de termos
     """
     current_user = auth_service.get_current_user()
-    
+
     query = request.search_query
     filters = request.search_filters.copy()
     limit = request.search_limit
-    
+
     # Adicionar filtro de usuário
     filters['user_id'] = current_user.id
-    
+
     # Verificar cache
     cache_key = f"keyword_search_{hash(query)}_{hash(str(filters))}_{limit}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Executar busca via service
     results = search_service.keyword_search(
         query=query,
         filters=filters,
         limit=limit
     )
-    
+
     # Cache por 15 minutos
     cache_service.set(cache_key, results, ttl=900)
-    
+
     # Log da busca
     logging_service.info(
         "SearchRoutes",
@@ -239,7 +239,7 @@ def keyword_search():
             'results_count': len(results.get('results', []))
         }
     )
-    
+
     return jsonify(results)
 
 
@@ -254,33 +254,33 @@ def get_search_suggestions():
     GET /search/suggestions?q=partial_query&limit=5
     """
     current_user = auth_service.get_current_user()
-    
+
     partial_query = request.args.get('q', '').strip()
     if not partial_query:
         return jsonify({'suggestions': []})
-    
+
     if len(partial_query) < 2:
         return jsonify({'suggestions': []})
-    
+
     limit = min(int(request.args.get('limit', 5)), 20)
-    
+
     # Verificar cache
     cache_key = f"search_suggestions_{hash(partial_query)}_{limit}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter sugestões via service
     suggestions = search_service.get_search_suggestions(
         partial_query=partial_query,
         user_id=current_user.id,
         limit=limit
     )
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, suggestions, ttl=3600)
-    
+
     return jsonify(suggestions)
 
 
@@ -295,17 +295,17 @@ def find_similar_documents(document_id: str):
     GET /search/similar/doc123?limit=5&threshold=0.7
     """
     current_user = auth_service.get_current_user()
-    
+
     limit = min(int(request.args.get('limit', 5)), 20)
     threshold = float(request.args.get('threshold', 0.7))
-    
+
     # Verificar cache
     cache_key = f"similar_docs_{document_id}_{limit}_{threshold}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Encontrar documentos similares via service
     similar_docs = search_service.find_similar_documents(
         document_id=document_id,
@@ -313,10 +313,10 @@ def find_similar_documents(document_id: str):
         limit=limit,
         similarity_threshold=threshold
     )
-    
+
     # Cache por 30 minutos
     cache_service.set(cache_key, similar_docs, ttl=1800)
-    
+
     # Log da busca
     logging_service.info(
         "SearchRoutes",
@@ -330,7 +330,7 @@ def find_similar_documents(document_id: str):
             'results_count': len(similar_docs.get('results', []))
         }
     )
-    
+
     return jsonify(similar_docs)
 
 
@@ -345,25 +345,25 @@ def get_search_facets():
     GET /search/facets?q=optional_query
     """
     current_user = auth_service.get_current_user()
-    
+
     query = request.args.get('q', '').strip()
-    
+
     # Verificar cache
     cache_key = f"search_facets_{hash(query)}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter facetas via service
     facets = search_service.get_search_facets(
         query=query if query else None,
         user_id=current_user.id
     )
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, facets, ttl=3600)
-    
+
     return jsonify(facets)
 
 
@@ -378,34 +378,34 @@ def get_trending_searches():
     GET /search/trending?period=week&limit=10
     """
     current_user = auth_service.get_current_user()
-    
+
     period = request.args.get('period', 'week')  # day, week, month
     limit = min(int(request.args.get('limit', 10)), 50)
-    
+
     # Validar período
     valid_periods = ['day', 'week', 'month']
     if period not in valid_periods:
         return jsonify({
             'error': f'Período inválido. Períodos válidos: {", ".join(valid_periods)}'
         }), 400
-    
+
     # Verificar cache
     cache_key = f"trending_searches_{period}_{limit}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter buscas em tendência via service
     trending = search_service.get_trending_searches(
         period=period,
         user_id=current_user.id,
         limit=limit
     )
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, trending, ttl=3600)
-    
+
     return jsonify(trending)
 
 
@@ -420,27 +420,27 @@ def get_search_history():
     GET /search/history?limit=20&page=1
     """
     current_user = auth_service.get_current_user()
-    
+
     page = request.args.get('page', 1, type=int)
     limit = min(int(request.args.get('limit', 20)), 100)
-    
+
     # Verificar cache
     cache_key = f"search_history_{current_user.id}_{page}_{limit}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter histórico via service
     history = search_service.get_user_search_history(
         user_id=current_user.id,
         page=page,
         limit=limit
     )
-    
+
     # Cache por 5 minutos
     cache_service.set(cache_key, history, ttl=300)
-    
+
     return jsonify(history)
 
 
@@ -451,20 +451,20 @@ def get_search_history():
 def delete_search_history_item(search_id: str):
     """Excluir item do histórico de busca"""
     current_user = auth_service.get_current_user()
-    
+
     # Excluir via service
     success = search_service.delete_search_history_item(
         search_id=search_id,
         user_id=current_user.id
     )
-    
+
     if not success:
         return jsonify({'error': 'Item do histórico não encontrado'}), 404
-    
+
     # Invalidar cache do histórico
     cache_pattern = f"search_history_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log da exclusão
     logging_service.info(
         "SearchRoutes",
@@ -473,7 +473,7 @@ def delete_search_history_item(search_id: str):
         user_id=current_user.id,
         metadata={'search_id': search_id}
     )
-    
+
     return jsonify({'message': 'Item do histórico excluído com sucesso'})
 
 
@@ -495,25 +495,25 @@ def export_search_results():
     """
     current_user = auth_service.get_current_user()
     data = request.get_json()
-    
+
     if not data or 'query' not in data:
         return jsonify({'error': 'Query de busca é obrigatória'}), 400
-    
+
     query = data['query']
     filters = data.get('filters', {})
     format_type = data.get('format', 'csv')
     include_content = data.get('include_content', False)
-    
+
     # Validar formato
     valid_formats = ['csv', 'json', 'excel']
     if format_type not in valid_formats:
         return jsonify({
             'error': f'Formato inválido. Formatos válidos: {", ".join(valid_formats)}'
         }), 400
-    
+
     # Adicionar filtro de usuário
     filters['user_id'] = current_user.id
-    
+
     # Exportar via service
     export_result = search_service.export_search_results(
         query=query,
@@ -522,7 +522,7 @@ def export_search_results():
         include_content=include_content,
         user_id=current_user.id
     )
-    
+
     # Log da exportação
     logging_service.info(
         "SearchRoutes",
@@ -535,7 +535,7 @@ def export_search_results():
             'results_count': export_result.get('results_count', 0)
         }
     )
-    
+
     return jsonify(export_result)
 
 
@@ -550,32 +550,32 @@ def get_search_analytics():
     GET /search/analytics?period=month
     """
     current_user = auth_service.get_current_user()
-    
+
     period = request.args.get('period', 'month')  # day, week, month, year
-    
+
     # Validar período
     valid_periods = ['day', 'week', 'month', 'year']
     if period not in valid_periods:
         return jsonify({
             'error': f'Período inválido. Períodos válidos: {", ".join(valid_periods)}'
         }), 400
-    
+
     # Verificar cache
     cache_key = f"search_analytics_{current_user.id}_{period}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter analytics via service
     analytics = search_service.get_user_search_analytics(
         user_id=current_user.id,
         period=period
     )
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, analytics, ttl=3600)
-    
+
     return jsonify(analytics)
 
 
@@ -585,20 +585,20 @@ def get_search_analytics():
 def get_index_status():
     """Obter status do índice de busca"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = "search_index_status"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter status via service
     status = search_service.get_index_status()
-    
+
     # Cache por 5 minutos
     cache_service.set(cache_key, status, ttl=300)
-    
+
     return jsonify(status)
 
 
@@ -608,14 +608,14 @@ def health_check():
     try:
         # Verificar service
         health_status = search_service.health_check()
-        
+
         return jsonify({
             'status': 'healthy',
             'service': 'search',
             'timestamp': health_status.get('timestamp'),
             'details': health_status
         })
-        
+
     except Exception as e:
         logging_service.error(
             "SearchRoutes",
@@ -627,4 +627,3 @@ def health_check():
             'service': 'search',
             'error': str(e)
         }), 500
-

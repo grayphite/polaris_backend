@@ -7,10 +7,9 @@ para wealth planning, incluindo trusts, contratos e relatórios.
 
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
-from pathlib import Path
 
 # Imports para geração de PDF
 try:
@@ -27,7 +26,7 @@ except ImportError:
     Paragraph = None
     HTML = None
 
-from src.database import db
+from src.extensions import db
 from src.models import DocumentoGerado
 
 
@@ -56,15 +55,15 @@ class DocumentTemplate:
 
 class PDFGeneratorService:
     """Service para geração de documentos PDF"""
-    
+
     def __init__(self):
         self.output_dir = os.path.join(os.getcwd(), 'generated_documents')
         self.templates_dir = os.path.join(os.getcwd(), 'document_templates')
-        
+
         # Criar diretórios se não existirem
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.templates_dir, exist_ok=True)
-        
+
         # Templates disponíveis
         self.templates = {
             'trust_agreement': DocumentTemplate(
@@ -100,12 +99,12 @@ class PDFGeneratorService:
                 css_styles=self._get_default_css()
             )
         }
-    
+
     def generate_document(self,
-                         template_type: str,
-                         data: Dict[str, Any],
-                         user_id: int,
-                         custom_template: str = None) -> PDFGenerationResult:
+                          template_type: str,
+                          data: Dict[str, Any],
+                          user_id: int,
+                          custom_template: str = None) -> PDFGenerationResult:
         """
         Gerar documento PDF
         
@@ -119,7 +118,7 @@ class PDFGeneratorService:
             PDFGenerationResult com resultado da geração
         """
         start_time = datetime.utcnow()
-        
+
         try:
             # Validar template
             if template_type not in self.templates and not custom_template:
@@ -127,7 +126,7 @@ class PDFGeneratorService:
                     success=False,
                     error=f"Template '{template_type}' não encontrado"
                 )
-            
+
             # Obter template
             if custom_template:
                 template = DocumentTemplate(
@@ -140,7 +139,7 @@ class PDFGeneratorService:
                 )
             else:
                 template = self.templates[template_type]
-            
+
             # Validar dados obrigatórios
             missing_fields = self._validate_template_data(template, data)
             if missing_fields:
@@ -148,11 +147,11 @@ class PDFGeneratorService:
                     success=False,
                     error=f"Campos obrigatórios faltando: {', '.join(missing_fields)}"
                 )
-            
+
             # Gerar nome único para o arquivo
             filename = f"{template_type}_{uuid.uuid4().hex[:8]}.pdf"
             file_path = os.path.join(self.output_dir, filename)
-            
+
             # Gerar PDF
             if HTML is not None:
                 # Usar WeasyPrint (preferido)
@@ -165,23 +164,23 @@ class PDFGeneratorService:
                     success=False,
                     error="Nenhuma biblioteca de geração de PDF disponível"
                 )
-            
+
             if not success:
                 return PDFGenerationResult(
                     success=False,
                     error="Erro na geração do PDF"
                 )
-            
+
             # Verificar se arquivo foi criado
             if not os.path.exists(file_path):
                 return PDFGenerationResult(
                     success=False,
                     error="Arquivo PDF não foi criado"
                 )
-            
+
             # Obter tamanho do arquivo
             file_size = os.path.getsize(file_path)
-            
+
             # Salvar no banco de dados
             documento = DocumentoGerado(
                 user_id=user_id,
@@ -192,13 +191,13 @@ class PDFGeneratorService:
                 template_data=data,
                 generated=True
             )
-            
+
             db.session.add(documento)
             db.session.commit()
-            
+
             # Calcular tempo de geração
             generation_time = (datetime.utcnow() - start_time).total_seconds()
-            
+
             return PDFGenerationResult(
                 success=True,
                 document_id=documento.id,
@@ -207,19 +206,19 @@ class PDFGeneratorService:
                 file_size=file_size,
                 generation_time=generation_time
             )
-            
+
         except Exception as e:
             db.session.rollback()
             # Limpar arquivo se houver erro
             if 'file_path' in locals() and os.path.exists(file_path):
                 os.remove(file_path)
-            
+
             self._log_error(f"Erro na geração de PDF: {str(e)}", user_id)
             return PDFGenerationResult(
                 success=False,
                 error="Erro interno na geração do documento"
             )
-    
+
     def get_document(self, document_id: int, user_id: int) -> Optional[DocumentoGerado]:
         """
         Obter documento gerado por ID
@@ -236,16 +235,16 @@ class PDFGeneratorService:
                 id=document_id,
                 user_id=user_id
             ).first()
-            
+
         except Exception as e:
             self._log_error(f"Erro ao obter documento: {str(e)}", user_id)
             return None
-    
+
     def list_documents(self,
-                      user_id: int,
-                      template_type: str = None,
-                      page: int = 1,
-                      per_page: int = 20) -> Dict[str, Any]:
+                       user_id: int,
+                       template_type: str = None,
+                       page: int = 1,
+                       per_page: int = 20) -> Dict[str, Any]:
         """
         Listar documentos gerados do usuário
         
@@ -260,16 +259,16 @@ class PDFGeneratorService:
         """
         try:
             query = DocumentoGerado.query.filter_by(user_id=user_id)
-            
+
             if template_type:
                 query = query.filter_by(template_type=template_type)
-            
+
             paginated = query.order_by(DocumentoGerado.created_at.desc()).paginate(
                 page=page,
                 per_page=per_page,
                 error_out=False
             )
-            
+
             return {
                 'documents': [doc.to_dict() for doc in paginated.items],
                 'pagination': {
@@ -281,7 +280,7 @@ class PDFGeneratorService:
                     'has_prev': paginated.has_prev
                 }
             }
-            
+
         except Exception as e:
             self._log_error(f"Erro ao listar documentos: {str(e)}", user_id)
             return {
@@ -295,7 +294,7 @@ class PDFGeneratorService:
                     'has_prev': False
                 }
             }
-    
+
     def delete_document(self, document_id: int, user_id: int) -> bool:
         """
         Excluir documento gerado
@@ -312,25 +311,25 @@ class PDFGeneratorService:
                 id=document_id,
                 user_id=user_id
             ).first()
-            
+
             if not documento:
                 return False
-            
+
             # Remover arquivo físico
             if os.path.exists(documento.file_path):
                 os.remove(documento.file_path)
-            
+
             # Remover do banco
             db.session.delete(documento)
             db.session.commit()
-            
+
             return True
-            
+
         except Exception as e:
             db.session.rollback()
             self._log_error(f"Erro ao excluir documento: {str(e)}", user_id)
             return False
-    
+
     def get_available_templates(self) -> List[Dict[str, Any]]:
         """
         Obter lista de templates disponíveis
@@ -340,7 +339,7 @@ class PDFGeneratorService:
         """
         try:
             templates_list = []
-            
+
             for template_key, template in self.templates.items():
                 templates_list.append({
                     'key': template_key,
@@ -349,13 +348,13 @@ class PDFGeneratorService:
                     'description': template.description,
                     'required_fields': template.fields
                 })
-            
+
             return templates_list
-            
+
         except Exception as e:
             self._log_error(f"Erro ao obter templates: {str(e)}")
             return []
-    
+
     def preview_template(self, template_type: str, sample_data: Dict = None) -> str:
         """
         Gerar preview HTML de um template
@@ -370,16 +369,16 @@ class PDFGeneratorService:
         try:
             if template_type not in self.templates:
                 return "<p>Template não encontrado</p>"
-            
+
             template = self.templates[template_type]
-            
+
             # Usar dados de exemplo se não fornecidos
             if not sample_data:
                 sample_data = self._get_sample_data(template_type)
-            
+
             # Renderizar template
             html_content = self._render_template(template.html_template, sample_data)
-            
+
             return f"""
             <html>
             <head>
@@ -390,11 +389,11 @@ class PDFGeneratorService:
             </body>
             </html>
             """
-            
+
         except Exception as e:
             self._log_error(f"Erro no preview: {str(e)}")
             return f"<p>Erro ao gerar preview: {str(e)}</p>"
-    
+
     def get_generation_stats(self, user_id: int) -> Dict[str, Any]:
         """
         Obter estatísticas de geração de documentos
@@ -407,25 +406,25 @@ class PDFGeneratorService:
         """
         try:
             total_docs = DocumentoGerado.query.filter_by(user_id=user_id).count()
-            
+
             # Estatísticas por tipo
             type_stats = db.session.query(
                 DocumentoGerado.template_type,
                 db.func.count(DocumentoGerado.id).label('count')
             ).filter_by(user_id=user_id).group_by(DocumentoGerado.template_type).all()
-            
+
             # Tamanho total dos arquivos
             total_size = db.session.query(
                 db.func.sum(DocumentoGerado.file_size)
             ).filter_by(user_id=user_id).scalar() or 0
-            
+
             # Documentos gerados hoje
             today = datetime.utcnow().date()
             docs_today = DocumentoGerado.query.filter(
                 DocumentoGerado.user_id == user_id,
                 db.func.date(DocumentoGerado.created_at) == today
             ).count()
-            
+
             return {
                 'total_documents': total_docs,
                 'documents_today': docs_today,
@@ -434,7 +433,7 @@ class PDFGeneratorService:
                 'by_template_type': {template_type: count for template_type, count in type_stats},
                 'available_templates': len(self.templates)
             }
-            
+
         except Exception as e:
             self._log_error(f"Erro nas estatísticas: {str(e)}", user_id)
             return {
@@ -445,7 +444,7 @@ class PDFGeneratorService:
                 'by_template_type': {},
                 'available_templates': 0
             }
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Verificar saúde do sistema de geração de PDF
@@ -457,26 +456,26 @@ class PDFGeneratorService:
             # Verificar diretórios
             output_dir_exists = os.path.exists(self.output_dir)
             output_dir_writable = os.access(self.output_dir, os.W_OK) if output_dir_exists else False
-            
+
             # Verificar bibliotecas
             libraries_available = {
                 'weasyprint': HTML is not None,
                 'reportlab': SimpleDocTemplate is not None
             }
-            
+
             # Teste de geração
             test_data = {'test_field': 'test_value'}
             test_template = "<html><body><h1>{{test_field}}</h1></body></html>"
-            
+
             try:
                 test_html = self._render_template(test_template, test_data)
                 generation_test = bool(test_html and 'test_value' in test_html)
             except:
                 generation_test = False
-            
+
             # Espaço em disco
             disk_usage = self._get_disk_usage()
-            
+
             status = "healthy"
             if not output_dir_writable:
                 status = "unhealthy"
@@ -484,7 +483,7 @@ class PDFGeneratorService:
                 status = "degraded"
             elif not generation_test:
                 status = "warning"
-            
+
             return {
                 "status": status,
                 "directories": {
@@ -503,22 +502,22 @@ class PDFGeneratorService:
                 "disk_usage": disk_usage,
                 "last_check": datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
                 "error": str(e),
                 "last_check": datetime.utcnow().isoformat()
             }
-    
+
     # Métodos privados auxiliares
-    
+
     def _generate_with_weasyprint(self, template: DocumentTemplate, data: Dict, file_path: str) -> bool:
         """Gerar PDF usando WeasyPrint"""
         try:
             # Renderizar HTML
             html_content = self._render_template(template.html_template, data)
-            
+
             # Criar HTML completo
             full_html = f"""
             <html>
@@ -531,16 +530,16 @@ class PDFGeneratorService:
             </body>
             </html>
             """
-            
+
             # Gerar PDF
             HTML(string=full_html).write_pdf(file_path)
-            
+
             return True
-            
+
         except Exception as e:
             self._log_error(f"Erro no WeasyPrint: {str(e)}")
             return False
-    
+
     def _generate_with_reportlab(self, template: DocumentTemplate, data: Dict, file_path: str) -> bool:
         """Gerar PDF usando ReportLab (fallback)"""
         try:
@@ -548,7 +547,7 @@ class PDFGeneratorService:
             doc = SimpleDocTemplate(file_path, pagesize=A4)
             styles = getSampleStyleSheet()
             story = []
-            
+
             # Título
             title_style = ParagraphStyle(
                 'CustomTitle',
@@ -557,21 +556,21 @@ class PDFGeneratorService:
                 spaceAfter=30,
                 alignment=TA_CENTER
             )
-            
+
             story.append(Paragraph(template.name, title_style))
             story.append(Spacer(1, 20))
-            
+
             # Conteúdo baseado nos dados
             for key, value in data.items():
                 if value:
                     # Título do campo
                     field_title = key.replace('_', ' ').title()
                     story.append(Paragraph(f"<b>{field_title}:</b>", styles['Heading2']))
-                    
+
                     # Valor do campo
                     story.append(Paragraph(str(value), styles['Normal']))
                     story.append(Spacer(1, 12))
-            
+
             # Rodapé
             footer_style = ParagraphStyle(
                 'Footer',
@@ -579,48 +578,48 @@ class PDFGeneratorService:
                 fontSize=8,
                 alignment=TA_CENTER
             )
-            
+
             story.append(Spacer(1, 30))
             story.append(Paragraph(
                 f"Generated by POLARIS on {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}",
                 footer_style
             ))
-            
+
             # Construir PDF
             doc.build(story)
-            
+
             return True
-            
+
         except Exception as e:
             self._log_error(f"Erro no ReportLab: {str(e)}")
             return False
-    
+
     def _render_template(self, template: str, data: Dict) -> str:
         """Renderizar template com dados"""
         try:
             # Substituição simples de variáveis
             rendered = template
-            
+
             for key, value in data.items():
                 placeholder = f"{{{{{key}}}}}"
                 rendered = rendered.replace(placeholder, str(value))
-            
+
             return rendered
-            
+
         except Exception as e:
             self._log_error(f"Erro na renderização: {str(e)}")
             return template
-    
+
     def _validate_template_data(self, template: DocumentTemplate, data: Dict) -> List[str]:
         """Validar dados obrigatórios do template"""
         missing_fields = []
-        
+
         for field in template.fields:
             if field not in data or not data[field]:
                 missing_fields.append(field)
-        
+
         return missing_fields
-    
+
     def _get_sample_data(self, template_type: str) -> Dict[str, str]:
         """Obter dados de exemplo para template"""
         sample_data = {
@@ -654,9 +653,9 @@ class PDFGeneratorService:
                 'actions_needed': 'Update registered office address'
             }
         }
-        
+
         return sample_data.get(template_type, {})
-    
+
     def _get_trust_template(self) -> str:
         """Template HTML para Trust Agreement"""
         return """
@@ -700,7 +699,7 @@ class PDFGeneratorService:
             </div>
         </div>
         """
-    
+
     def _get_estate_template(self) -> str:
         """Template HTML para Estate Planning Report"""
         return """
@@ -733,7 +732,7 @@ class PDFGeneratorService:
             </div>
         </div>
         """
-    
+
     def _get_tax_template(self) -> str:
         """Template HTML para Tax Analysis Report"""
         return """
@@ -766,7 +765,7 @@ class PDFGeneratorService:
             </div>
         </div>
         """
-    
+
     def _get_compliance_template(self) -> str:
         """Template HTML para Compliance Report"""
         return """
@@ -795,7 +794,7 @@ class PDFGeneratorService:
             </div>
         </div>
         """
-    
+
     def _get_default_css(self) -> str:
         """CSS padrão para documentos"""
         return """
@@ -868,17 +867,17 @@ class PDFGeneratorService:
             }
         }
         """
-    
+
     def _get_disk_usage(self) -> Dict[str, Any]:
         """Obter uso do disco"""
         try:
             import shutil
             total, used, free = shutil.disk_usage(self.output_dir)
-            
+
             return {
-                'total_gb': round(total / (1024**3), 2),
-                'used_gb': round(used / (1024**3), 2),
-                'free_gb': round(free / (1024**3), 2),
+                'total_gb': round(total / (1024 ** 3), 2),
+                'used_gb': round(used / (1024 ** 3), 2),
+                'free_gb': round(free / (1024 ** 3), 2),
                 'usage_percent': round((used / total) * 100, 2)
             }
         except:
@@ -888,7 +887,7 @@ class PDFGeneratorService:
                 'free_gb': 0,
                 'usage_percent': 0
             }
-    
+
     def _log_error(self, error_msg: str, user_id: int = None):
         """Log de erro"""
         try:
@@ -902,6 +901,6 @@ class PDFGeneratorService:
         except:
             print(f"[ERROR] PDFGeneratorService: {error_msg}")
 
+
 # Instância global do service
 pdf_generator_service = PDFGeneratorService()
-

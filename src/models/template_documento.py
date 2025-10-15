@@ -1,41 +1,42 @@
-from src.database import db
 from datetime import datetime
+
+from src.extensions import db
 
 
 class TemplateDeDocumento(db.Model):
     """Modelo para templates de documentos jurídicos do POLARIS"""
     __tablename__ = 'templates_documento'
-    
+
     id = db.Column(db.Integer, primary_key=True)
-    
+
     # Informações básicas do template
     nome = db.Column(db.String(200), nullable=False)
     descricao = db.Column(db.Text)
     categoria = db.Column(db.String(100), nullable=False)  # Trust, Estate, International, Corporate
     subcategoria = db.Column(db.String(100))  # GRAT, ILIT, LLC, etc.
-    
+
     # Jurisdição e aplicabilidade
     jurisdicao = db.Column(db.String(50))  # EUA, Brasil, Cayman, etc.
     estado_jurisdicao = db.Column(db.String(50))  # Delaware, Nevada, etc.
-    
+
     # Conteúdo do template
     conteudo_template = db.Column(db.Text, nullable=False)  # Template com placeholders
     placeholders = db.Column(db.JSON)  # Lista de placeholders e suas descrições
-    
+
     # Configurações de geração
     formato_saida = db.Column(db.String(10), default='PDF')  # PDF, DOCX
     requer_assinatura = db.Column(db.Boolean, default=False)
     requer_notarizacao = db.Column(db.Boolean, default=False)
-    
+
     # Complexidade e requisitos
     nivel_complexidade = db.Column(db.String(20))  # Básico, Intermediário, Avançado
     patrimonio_minimo = db.Column(db.Numeric(15, 2))  # Patrimônio mínimo recomendado
     patrimonio_maximo = db.Column(db.Numeric(15, 2))  # Patrimônio máximo recomendado
-    
+
     # Informações legais
     base_legal = db.Column(db.Text)  # Referências legais e regulamentações
     consideracoes_fiscais = db.Column(db.Text)  # Implicações fiscais importantes
-    
+
     # Metadados
     versao = db.Column(db.String(10), default='1.0')
     is_active = db.Column(db.Boolean, default=True)
@@ -43,7 +44,7 @@ class TemplateDeDocumento(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relacionamentos
     documentos_gerados = db.relationship('DocumentoGerado', backref='template', lazy=True)
     creator = db.relationship('User', backref='templates_criados', foreign_keys=[created_by])
@@ -92,4 +93,3 @@ class TemplateDeDocumento(db.Model):
             'versao': self.versao,
             'is_active': self.is_active
         }
-

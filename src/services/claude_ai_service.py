@@ -5,13 +5,14 @@ Este service gerencia toda a comunicação com a API do Claude AI,
 incluindo chat, geração de documentos e análise de estruturas jurídicas.
 """
 
-import os
 import json
-import requests
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+import os
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, Any
+
+import requests
 
 
 @dataclass
@@ -20,7 +21,7 @@ class ChatMessage:
     role: str  # 'user' ou 'assistant'
     content: str
     timestamp: datetime = None
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.utcnow()
@@ -35,7 +36,7 @@ class AIResponse:
     usage: Dict = None
     context_used: List[str] = None
     timestamp: datetime = None
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.utcnow()
@@ -43,17 +44,17 @@ class AIResponse:
 
 class ClaudeAIService:
     """Service para integração com Claude AI"""
-    
+
     def __init__(self):
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.model = "claude-3-haiku-20240307"
         self.max_tokens = 1000
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+
         if not self.api_key:
             self.logger.warning("ANTHROPIC_API_KEY não configurada - modo simulação")
-    
+
     def chat(self, prompt: str, user_id: int = None,
              context: List[str] = None) -> AIResponse:
         """
@@ -77,17 +78,17 @@ class ClaudeAIService:
                              f"ANTHROPIC_API_KEY. Seu prompt foi: {prompt}"),
                     usage={'tokens': 0}
                 )
-            
+
             # Construir prompt com contexto se fornecido
             enhanced_prompt = self._build_enhanced_prompt(prompt, context)
-            
+
             # Preparar headers
             headers = {
                 "Content-Type": "application/json",
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01"
             }
-            
+
             # Preparar payload
             payload = {
                 "model": self.model,
@@ -99,7 +100,7 @@ class ClaudeAIService:
                     }
                 ]
             }
-            
+
             # Fazer requisição
             response = requests.post(
                 self.api_url,
@@ -107,15 +108,15 @@ class ClaudeAIService:
                 json=payload,
                 timeout=30
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('content', [{}])[0].get('text', '')
                 usage = data.get('usage', {})
-                
+
                 # Log da interação (se logging service estiver disponível)
                 self._log_interaction(user_id, prompt, content, usage)
-                
+
                 return AIResponse(
                     success=True,
                     content=content,
@@ -125,12 +126,12 @@ class ClaudeAIService:
             else:
                 error_msg = f"Erro na API Claude: {response.status_code} - {response.text}"
                 self._log_error(error_msg, user_id)
-                
+
                 return AIResponse(
                     success=False,
                     error="Erro na comunicação com IA. Tente novamente."
                 )
-                
+
         except requests.exceptions.Timeout:
             error_msg = "Timeout na comunicação com Claude AI"
             self._log_error(error_msg, user_id)
@@ -138,7 +139,7 @@ class ClaudeAIService:
                 success=False,
                 error="Timeout na comunicação com IA. Tente novamente."
             )
-            
+
         except Exception as e:
             error_msg = f"Erro inesperado no Claude AI: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -146,7 +147,7 @@ class ClaudeAIService:
                 success=False,
                 error="Erro interno. Tente novamente."
             )
-    
+
     def chat_with_rag(self, prompt: str, user_id: int = None) -> AIResponse:
         """
         Chat com RAG (Retrieval-Augmented Generation)
@@ -162,19 +163,19 @@ class ClaudeAIService:
         try:
             # Buscar contexto relevante (se search service estiver disponível)
             relevant_context = self._get_relevant_context(prompt)
-            
+
             # Chat com contexto
             return self.chat(prompt, user_id, relevant_context)
-            
+
         except Exception as e:
             # Fallback para chat sem RAG
             return self.chat(prompt, user_id)
-    
-    def generate_document(self, 
-                         document_type: str,
-                         client_data: Dict,
-                         template_data: Dict = None,
-                         user_id: int = None) -> AIResponse:
+
+    def generate_document(self,
+                          document_type: str,
+                          client_data: Dict,
+                          template_data: Dict = None,
+                          user_id: int = None) -> AIResponse:
         """
         Gerar documento jurídico usando Claude AI
         
@@ -190,14 +191,14 @@ class ClaudeAIService:
         try:
             # Construir prompt para geração de documento
             prompt = self._build_document_prompt(document_type, client_data, template_data)
-            
+
             # Usar modelo mais avançado para documentos
             original_model = self.model
             original_max_tokens = self.max_tokens
-            
+
             self.model = "claude-3-haiku-20240307"  # Modelo mais capaz
             self.max_tokens = 2000  # Mais tokens para documentos
-            
+
             try:
                 response = self.chat(prompt, user_id)
                 return response
@@ -205,7 +206,7 @@ class ClaudeAIService:
                 # Restaurar configurações originais
                 self.model = original_model
                 self.max_tokens = original_max_tokens
-                
+
         except Exception as e:
             error_msg = f"Erro na geração de documento: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -213,11 +214,11 @@ class ClaudeAIService:
                 success=False,
                 error="Erro na geração do documento. Tente novamente."
             )
-    
-    def analyze_legal_structure(self, 
-                               structure_data: Dict,
-                               jurisdiction: str = None,
-                               user_id: int = None) -> AIResponse:
+
+    def analyze_legal_structure(self,
+                                structure_data: Dict,
+                                jurisdiction: str = None,
+                                user_id: int = None) -> AIResponse:
         """
         Analisar estrutura jurídica e fornecer recomendações
         
@@ -232,12 +233,12 @@ class ClaudeAIService:
         try:
             # Construir prompt para análise
             prompt = self._build_analysis_prompt(structure_data, jurisdiction)
-            
+
             # Buscar contexto jurídico relevante
             legal_context = self._get_legal_context(structure_data, jurisdiction)
-            
+
             return self.chat(prompt, user_id, legal_context)
-            
+
         except Exception as e:
             error_msg = f"Erro na análise jurídica: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -245,11 +246,11 @@ class ClaudeAIService:
                 success=False,
                 error="Erro na análise. Tente novamente."
             )
-    
-    def get_recommendations(self, 
-                           client_profile: Dict,
-                           objectives: List[str],
-                           user_id: int = None) -> AIResponse:
+
+    def get_recommendations(self,
+                            client_profile: Dict,
+                            objectives: List[str],
+                            user_id: int = None) -> AIResponse:
         """
         Obter recomendações personalizadas de wealth planning
         
@@ -264,12 +265,12 @@ class ClaudeAIService:
         try:
             # Construir prompt para recomendações
             prompt = self._build_recommendations_prompt(client_profile, objectives)
-            
+
             # Buscar contexto de wealth planning
             wp_context = self._get_wealth_planning_context(client_profile)
-            
+
             return self.chat(prompt, user_id, wp_context)
-            
+
         except Exception as e:
             error_msg = f"Erro nas recomendações: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -277,7 +278,7 @@ class ClaudeAIService:
                 success=False,
                 error="Erro ao gerar recomendações. Tente novamente."
             )
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Verificar saúde da integração com Claude AI
@@ -288,7 +289,7 @@ class ClaudeAIService:
         try:
             # Teste simples com a API
             test_response = self.chat("Hello", context=["Test"])
-            
+
             return {
                 "status": "healthy" if test_response.success else "unhealthy",
                 "api_key_configured": bool(self.api_key),
@@ -297,7 +298,7 @@ class ClaudeAIService:
                 "test_success": test_response.success,
                 "error": test_response.error if not test_response.success else None
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
@@ -307,9 +308,9 @@ class ClaudeAIService:
                 "test_success": False,
                 "error": str(e)
             }
-    
+
     # Métodos privados auxiliares
-    
+
     def _build_enhanced_prompt(self, prompt: str, context: List[str] = None) -> str:
         """Construir prompt enriquecido com contexto"""
         if not context:
@@ -322,9 +323,9 @@ Responda de forma profissional e técnica, considerando:
 - Melhores práticas do setor
 
 Pergunta: {prompt}"""
-        
+
         context_text = "\n".join([f"- {ctx}" for ctx in context])
-        
+
         return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
 
 CONTEXTO RELEVANTE:
@@ -337,11 +338,11 @@ Baseando-se no contexto acima e em seu conhecimento, responda de forma profissio
 - Melhores práticas do setor
 
 Pergunta: {prompt}"""
-    
+
     def _build_document_prompt(self, document_type: str, client_data: Dict, template_data: Dict = None) -> str:
         """Construir prompt para geração de documento"""
         client_info = json.dumps(client_data, indent=2, ensure_ascii=False)
-        
+
         return f"""Você é um especialista em documentos jurídicos para wealth planning.
 
 Gere um documento profissional do tipo: {document_type.upper()}
@@ -357,12 +358,12 @@ INSTRUÇÕES:
 5. Formate de forma profissional
 
 Gere o documento completo:"""
-    
+
     def _build_analysis_prompt(self, structure_data: Dict, jurisdiction: str = None) -> str:
         """Construir prompt para análise jurídica"""
         structure_info = json.dumps(structure_data, indent=2, ensure_ascii=False)
         jurisdiction_text = f" na jurisdição {jurisdiction}" if jurisdiction else ""
-        
+
         return f"""Você é um especialista em estruturas jurídicas internacionais.
 
 Analise a seguinte estrutura{jurisdiction_text}:
@@ -379,12 +380,12 @@ FORNEÇA:
 6. Aspectos de compliance
 
 Análise:"""
-    
+
     def _build_recommendations_prompt(self, client_profile: Dict, objectives: List[str]) -> str:
         """Construir prompt para recomendações"""
         profile_info = json.dumps(client_profile, indent=2, ensure_ascii=False)
         objectives_text = "\n".join([f"- {obj}" for obj in objectives])
-        
+
         return f"""Você é um consultor especializado em wealth planning.
 
 PERFIL DO CLIENTE:
@@ -402,7 +403,7 @@ Forneça recomendações personalizadas incluindo:
 6. Próximos passos
 
 Recomendações:"""
-    
+
     def _get_relevant_context(self, prompt: str) -> List[str]:
         """Buscar contexto relevante para RAG"""
         try:
@@ -415,7 +416,7 @@ Recomendações:"""
             ]
         except:
             return []
-    
+
     def _get_legal_context(self, structure_data: Dict, jurisdiction: str = None) -> List[str]:
         """Buscar contexto jurídico específico"""
         try:
@@ -427,23 +428,23 @@ Recomendações:"""
             ]
         except:
             return []
-    
+
     def _get_wealth_planning_context(self, client_profile: Dict) -> List[str]:
         """Buscar contexto de wealth planning"""
         try:
             # Contexto baseado no perfil do cliente
             context = []
-            
+
             if client_profile.get('patrimonio_estimado', 0) > 10000000:
                 context.append("Cliente high net worth - estruturas complexas recomendadas")
-            
+
             if client_profile.get('nacionalidade') == 'brasileira':
                 context.append("Considerações específicas para residentes fiscais brasileiros")
-            
+
             return context
         except:
             return []
-    
+
     def _log_interaction(self, user_id: int, prompt: str, response: str, usage: Dict):
         """Log da interação com IA"""
         try:
@@ -458,7 +459,7 @@ Recomendações:"""
             # logging_service.log_ai_interaction(log_data)
         except:
             pass
-    
+
     def _log_error(self, error_msg: str, user_id: int = None):
         """Log de erro"""
         try:
@@ -477,4 +478,3 @@ Recomendações:"""
 
 # Instância global do service
 claude_ai_service = ClaudeAIService()
-

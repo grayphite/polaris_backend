@@ -2,19 +2,18 @@
 Modelos de dados do POLARIS
 """
 
-from .user import User
-from .cliente import Cliente
-from .template_documento import TemplateDeDocumento
-from .documento_gerado import DocumentoGerado
-from .fonte_juridica import FonteJuridica
 from .audit_log import AuditLog
+from .cliente import Cliente
+from .documento_gerado import DocumentoGerado
 from .documents import (
     DocumentoUpload, SearchIndex, LegalSource, ScrapedContent
 )
+from .fonte_juridica import FonteJuridica
+from .template_documento import TemplateDeDocumento
+from .user import User
 
 __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
     'LegalSource', 'ScrapedContent'
 ]
-

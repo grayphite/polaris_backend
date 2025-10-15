@@ -5,10 +5,9 @@ Testa todas as funcionalidades críticas dos services implementados.
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import tempfile
 import os
-import json
 from datetime import datetime
 
 # Configurar ambiente de teste
@@ -42,17 +41,13 @@ class TestClaudeAIService(unittest.TestCase):
         mock_post.return_value = mock_response
         
         # Executar teste
-        result = self.service.chat(
-            prompt="Teste",
-            user_id=1,
-            use_rag=False
-        )
-        
+        result = self.service.chat(prompt="Teste", user_id=1)
+
         # Verificar resultado
-        self.assertTrue(result['success'])
-        self.assertIn('response', result)
-        self.assertEqual(result['response'], 'Resposta do Claude')
-    
+        self.assertTrue(result.success)
+        self.assertTrue(hasattr(result, 'response'))
+        self.assertEqual(result.response, 'Resposta do Claude')
+
     def test_chat_validation(self):
         """Testa validação de entrada do chat"""
         with self.assertRaises(ValueError):
@@ -77,44 +72,45 @@ class TestAuthService(unittest.TestCase):
     
     def test_generate_token(self):
         """Testa geração de token JWT"""
-        user_data = {'id': 1, 'email': 'test@example.com'}
-        token = self.service.generate_token(user_data)
-        
+        # Use a User object instead of dict
+        from src.models.user import User
+        user = User(id=1, email='test@example.com', username='test', password_hash='hash', first_name='Test', last_name='User')
+        token, _ = self.service._generate_token(user)
+
         self.assertIsInstance(token, str)
         self.assertTrue(len(token) > 50)
     
     def test_validate_token(self):
         """Testa validação de token JWT"""
-        user_data = {'id': 1, 'email': 'test@example.com'}
-        token = self.service.generate_token(user_data)
-        
-        # Token válido
+        from src.models.user import User
+        user = User(id=1, email='test@example.com', username='test', password_hash='hash', first_name='Test', last_name='User')
+        token, _ = self.service._generate_token(user)
+
         decoded = self.service.validate_token(token)
-        self.assertEqual(decoded['id'], 1)
-        self.assertEqual(decoded['email'], 'test@example.com')
-        
-        # Token inválido
+        self.assertEqual(decoded.user_id, 1)
+        self.assertEqual(decoded.email, 'test@example.com')
+
         invalid_decoded = self.service.validate_token('token_invalido')
-        self.assertIsNone(invalid_decoded)
-    
+        self.assertFalse(invalid_decoded.is_valid)
+
     def test_hash_password(self):
         """Testa hash de senha"""
         password = "senha123"
-        hashed = self.service.hash_password(password)
-        
+        hashed = self.service._hash_password(password)
+
         self.assertNotEqual(password, hashed)
         self.assertTrue(len(hashed) > 50)
     
     def test_verify_password(self):
         """Testa verificação de senha"""
         password = "senha123"
-        hashed = self.service.hash_password(password)
-        
+        hashed = self.service._hash_password(password)
+
         # Senha correta
-        self.assertTrue(self.service.verify_password(password, hashed))
-        
+        self.assertTrue(self.service._verify_password(password, hashed))
+
         # Senha incorreta
-        self.assertFalse(self.service.verify_password("senha_errada", hashed))
+        self.assertFalse(self.service._verify_password("senha_errada", hashed))
 
 
 class TestDocumentProcessorService(unittest.TestCase):
@@ -435,4 +431,3 @@ if __name__ == '__main__':
         print("\n❌ ALGUNS TESTES FALHARAM!")
     
     exit(0 if success else 1)
-
