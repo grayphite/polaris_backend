@@ -6,7 +6,7 @@ Entry point for production deployment
 
 import os
 import sys
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 from flask import jsonify
 
@@ -24,7 +24,7 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'timestamp': datetime.now(UTC).isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
     })
 
 
