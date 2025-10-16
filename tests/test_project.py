@@ -473,13 +473,13 @@ class TestProjectRoutes(unittest.TestCase):
         
         self.assertEqual(response.status_code, 200)
         
-        # Verify project is soft-deleted
+        # Verify project is permanently deleted (not found)
         project = project_service.get_project_by_id(
             project_id, 
             self.test_user.id, 
             include_deleted=True
         )
-        self.assertTrue(project['is_deleted'])
+        self.assertIsNone(project)
     
     def test_restore_project_endpoint(self):
         """Test POST /api/projects/<id>/restore"""
