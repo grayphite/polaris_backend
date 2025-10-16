@@ -12,9 +12,10 @@ from .fonte_juridica import FonteJuridica
 from .template_documento import TemplateDeDocumento
 from .user import User
 from .project import Project
+from .chat import Chat
 
 __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
-    'LegalSource', 'ScrapedContent', 'Project'
+    'LegalSource', 'ScrapedContent', 'Project', 'Chat'
 ]

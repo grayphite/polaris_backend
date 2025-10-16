@@ -264,9 +264,22 @@ class ProjectService:
             project.deleted_by = user_id
             project.updated_at = datetime.now(UTC)
             
+            # Cascade: soft delete all associated chats
+            from src.models.chat import Chat
+            cascade_count = 0
+            for chat in project.chats.filter_by(is_deleted=False):
+                chat.is_deleted = True
+                chat.deleted_at = datetime.now(UTC)
+                chat.deleted_by = user_id
+                chat.updated_at = datetime.now(UTC)
+                cascade_count += 1
+            
             db.session.commit()
             
-            self.logger.info(f"Project soft-deleted: {project.id} by user {user_id}")
+            self.logger.info(
+                f"Project soft-deleted: {project.id} by user {user_id}. "
+                f"Cascade deleted {cascade_count} chats"
+            )
             
             return ProjectResult(
                 success=True,
@@ -309,9 +322,22 @@ class ProjectService:
             project.deleted_by = None
             project.updated_at = datetime.now(UTC)
             
+            # Cascade: restore all associated chats
+            from src.models.chat import Chat
+            cascade_count = 0
+            for chat in project.chats.filter_by(is_deleted=True):
+                chat.is_deleted = False
+                chat.deleted_at = None
+                chat.deleted_by = None
+                chat.updated_at = datetime.now(UTC)
+                cascade_count += 1
+            
             db.session.commit()
             
-            self.logger.info(f"Project restored: {project.id} by user {user_id}")
+            self.logger.info(
+                f"Project restored: {project.id} by user {user_id}. "
+                f"Cascade restored {cascade_count} chats"
+            )
             
             return ProjectResult(
                 success=True,
