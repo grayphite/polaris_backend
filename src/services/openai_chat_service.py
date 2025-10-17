@@ -181,12 +181,16 @@ class OpenAIChatService:
                     error=f"OpenAI API error: {openai_response.error}"
                 )
             
+            # Generate chat name based on user question
+            chat_name = self.generate_chat_name(user_question.strip(), ai_model)
+            
             # Create AI chat record
             ai_chat = AIChat(
                 chat_id=chat_id,
                 user_id=user_id,
                 user_question=user_question.strip(),
                 ai_answer=openai_response.content,
+                chat_name=chat_name,
                 ai_model=ai_model,
                 ai_model_provider="OpenAI",
                 conversation_context=conversation_context,
@@ -668,6 +672,106 @@ class OpenAIChatService:
             error_msg = f"Error generating previous context: {str(e)}"
             self.logger.error(error_msg)
             return ""
+
+    def generate_chat_name(self, user_question: str, model: str = "gpt-4.1") -> str:
+        """
+        Generate a concise 2-5 word name/label for the chat based on user question
+        
+        Args:
+            user_question: User's question to generate name from
+            model: AI model to use for name generation
+            
+        Returns:
+            Generated chat name (2-5 words) or fallback name if generation fails
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.openai_client:
+                self.logger.warning("OpenAI client not initialized, using fallback name")
+                return self._generate_fallback_name(user_question)
+            
+            # Create a specific prompt for name generation
+            name_prompt = f"""Generate a concise, descriptive name for this conversation based on the user's question. 
+The name should be 2-5 words that capture the main topic or intent.
+Do not include any formatting, quotes, or extra text - just return the name.
+
+User question: {user_question}
+
+Name:"""
+            
+            try:
+                start_time = time.time()
+                
+                # Make API call for name generation
+                response = self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that generates concise, descriptive names for conversations. Always respond with just the name, no additional text."},
+                        {"role": "user", "content": name_prompt}
+                    ],
+                    max_tokens=20,  # Very short response
+                    temperature=0.3  # Lower temperature for more consistent naming
+                )
+                
+                response_time_ms = int((time.time() - start_time) * 1000)
+                
+                if response.choices and response.choices[0].message.content:
+                    generated_name = response.choices[0].message.content.strip()
+                    
+                    # Clean up the response (remove quotes, extra formatting)
+                    generated_name = generated_name.strip('"\'`').strip()
+                    
+                    # Validate length (2-5 words)
+                    words = generated_name.split()
+                    if 2 <= len(words) <= 5:
+                        self.logger.info(f"Generated chat name: '{generated_name}' in {response_time_ms}ms")
+                        return generated_name
+                    else:
+                        self.logger.warning(f"Generated name has {len(words)} words, using fallback")
+                        return self._generate_fallback_name(user_question)
+                else:
+                    self.logger.warning("No content in OpenAI response for name generation")
+                    return self._generate_fallback_name(user_question)
+                    
+            except Exception as e:
+                self.logger.error(f"OpenAI API error during name generation: {str(e)}")
+                return self._generate_fallback_name(user_question)
+                
+        except Exception as e:
+            self.logger.error(f"Error generating chat name: {str(e)}")
+            return self._generate_fallback_name(user_question)
+    
+    def _generate_fallback_name(self, user_question: str) -> str:
+        """
+        Generate a fallback name when OpenAI generation fails
+        
+        Args:
+            user_question: User's question
+            
+        Returns:
+            Fallback name based on question content
+        """
+        try:
+            # Simple fallback: take first few words and clean them up
+            words = user_question.split()[:3]  # Take first 3 words
+            fallback_name = " ".join(words)
+            
+            # Clean up common words and make it more readable
+            fallback_name = fallback_name.lower()
+            fallback_name = fallback_name.replace("?", "").replace("!", "").replace(".", "")
+            fallback_name = fallback_name.title()  # Capitalize first letter of each word
+            
+            # Ensure it's not too long
+            if len(fallback_name) > 50:
+                fallback_name = fallback_name[:47] + "..."
+            
+            self.logger.info(f"Generated fallback name: '{fallback_name}'")
+            return fallback_name
+            
+        except Exception as e:
+            self.logger.error(f"Error generating fallback name: {str(e)}")
+            return "AI Chat"
 
     def _get_openai_response(self, user_question: str, model: str = "gpt-4.1",
                            conversation_context: str = None) -> OpenAIResponse:

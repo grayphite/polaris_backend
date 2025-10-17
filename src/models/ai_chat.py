@@ -29,6 +29,7 @@ class AIChat(db.Model):
     # Chat content
     user_question = db.Column(db.Text, nullable=False)
     ai_answer = db.Column(db.Text, nullable=False)
+    chat_name = db.Column(db.String(100), nullable=True)  # AI-generated name/label for this chat
     
     # AI model information
     ai_model = db.Column(db.String(100), nullable=False)  # e.g., "gpt-4", "claude-3-haiku"
@@ -65,6 +66,7 @@ class AIChat(db.Model):
             'user_id': self.user_id,
             'user_question': self.user_question,
             'ai_answer': self.ai_answer,
+            'chat_name': self.chat_name,
             'ai_model': self.ai_model,
             'ai_model_provider': self.ai_model_provider,
             'context_metadata': self.context_metadata,
@@ -82,6 +84,7 @@ class AIChat(db.Model):
             'id': self.id,
             'chat_id': self.chat_id,
             'user_question': self.user_question[:100] + '...' if len(self.user_question) > 100 else self.user_question,
+            'chat_name': self.chat_name,
             'ai_model': self.ai_model,
             'ai_model_provider': self.ai_model_provider,
             'created_at': self.created_at.isoformat() if self.created_at else None,
