@@ -408,7 +408,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['ai_model', 'conversation_context']
+    optional_fields=['ai_model', 'conversation_context', 'context_limit']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -422,13 +422,24 @@ def send_message():
     current_user = get_current_user()
     data = request.validated_data
     
+    # Validate context_limit if provided
+    context_limit = data.get('context_limit', 10)
+    if context_limit is not None:
+        try:
+            context_limit = int(context_limit)
+            if context_limit < 1 or context_limit > 50:
+                return jsonify({'error': 'context_limit must be between 1 and 50'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'context_limit must be a valid integer'}), 400
+    
     # Create AI chat via service (this will also send to OpenAI)
     result = openai_chat_service.create_ai_chat(
         chat_id=data['chat_id'],
         user_id=current_user.id,
         user_question=data['user_question'],
         ai_model=data.get('ai_model', 'gpt-4.1'),
-        conversation_context=data.get('conversation_context')
+        conversation_context=data.get('conversation_context'),
+        context_limit=context_limit
     )
     
     if not result.success:

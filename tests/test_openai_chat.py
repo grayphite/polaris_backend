@@ -105,7 +105,7 @@ def mock_openai_response():
             'prompt_tokens': 20,
             'completion_tokens': 30
         },
-        model='gpt-3.5-turbo',
+        model='gpt-4.1',
         request_id='test-request-id',
         response_time_ms=1500
     )
@@ -122,7 +122,7 @@ class TestAIChatModels:
                 user_id=1,
                 user_question="What is the capital of France?",
                 ai_answer="The capital of France is Paris.",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI",
                 context_metadata={'test': 'data'}
             )
@@ -135,7 +135,7 @@ class TestAIChatModels:
             assert ai_chat.user_id == 1
             assert ai_chat.user_question == "What is the capital of France?"
             assert ai_chat.ai_answer == "The capital of France is Paris."
-            assert ai_chat.ai_model == "gpt-3.5-turbo"
+            assert ai_chat.ai_model == "gpt-4.1"
             assert ai_chat.ai_model_provider == "OpenAI"
             assert ai_chat.context_metadata == {'test': 'data'}
             assert ai_chat.is_deleted is False
@@ -149,7 +149,7 @@ class TestAIChatModels:
                 user_id=1,
                 user_question="Test question",
                 ai_answer="Test answer",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             db.session.add(ai_chat)
@@ -186,7 +186,7 @@ class TestAIChatModels:
                 user_id=1,
                 user_question="Test question",
                 ai_answer="Test answer",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             
@@ -214,7 +214,7 @@ class TestOpenAIChatService:
             mock_openai.ChatCompletion.create.return_value = MagicMock(
                 choices=[MagicMock(message=MagicMock(content="Test AI response"))],
                 usage=MagicMock(to_dict=lambda: {'total_tokens': 50, 'prompt_tokens': 20, 'completion_tokens': 30}),
-                model='gpt-3.5-turbo',
+                model='gpt-4.1',
                 id='test-request-id'
             )
             
@@ -225,14 +225,14 @@ class TestOpenAIChatService:
                 chat_id=test_chat.id,
                 user_id=1,
                 user_question="What is AI?",
-                ai_model="gpt-3.5-turbo"
+                ai_model="gpt-4.1"
             )
             
             assert result.success is True
             assert result.ai_chat is not None
             assert result.ai_chat['user_question'] == "What is AI?"
             assert result.ai_chat['ai_answer'] == "Test AI response"
-            assert result.ai_chat['ai_model'] == "gpt-3.5-turbo"
+            assert result.ai_chat['ai_model'] == "gpt-4.1"
             assert result.ai_chat['ai_model_provider'] == "OpenAI"
             
             # Verify AI chat was saved to database
@@ -255,7 +255,7 @@ class TestOpenAIChatService:
                 chat_id=test_chat.id,
                 user_id=1,
                 user_question="",  # Empty question
-                ai_model="gpt-3.5-turbo"
+                ai_model="gpt-4.1"
             )
             
             assert result.success is False
@@ -270,7 +270,7 @@ class TestOpenAIChatService:
                 chat_id=test_chat.id,
                 user_id=999,  # Different user ID
                 user_question="What is AI?",
-                ai_model="gpt-3.5-turbo"
+                ai_model="gpt-4.1"
             )
             
             assert result.success is False
@@ -285,7 +285,7 @@ class TestOpenAIChatService:
                 user_id=1,
                 user_question="Test question",
                 ai_answer="Test answer",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             db.session.add(ai_chat)
@@ -309,7 +309,7 @@ class TestOpenAIChatService:
                     user_id=1,
                     user_question=f"Question {i}",
                     ai_answer=f"Answer {i}",
-                    ai_model="gpt-3.5-turbo",
+                    ai_model="gpt-4.1",
                     ai_model_provider="OpenAI"
                 )
                 db.session.add(ai_chat)
@@ -331,7 +331,7 @@ class TestOpenAIChatService:
                 user_id=1,
                 user_question="Original question",
                 ai_answer="Original answer",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             db.session.add(ai_chat)
@@ -356,7 +356,7 @@ class TestOpenAIChatService:
                 user_id=1,
                 user_question="Test question",
                 ai_answer="Test answer",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             db.session.add(ai_chat)
@@ -395,7 +395,7 @@ class TestOpenAIChatRoutes:
             mock_openai.ChatCompletion.create.return_value = MagicMock(
                 choices=[MagicMock(message=MagicMock(content="Test AI response"))],
                 usage=MagicMock(to_dict=lambda: {'total_tokens': 50}),
-                model='gpt-3.5-turbo',
+                model='gpt-4.1',
                 id='test-request-id'
             )
             
@@ -404,7 +404,7 @@ class TestOpenAIChatRoutes:
                 headers=auth_headers,
                 json={
                     'user_question': 'What is artificial intelligence?',
-                    'ai_model': 'gpt-3.5-turbo'
+                    'ai_model': 'gpt-4.1'
                 }
             )
             
@@ -412,7 +412,7 @@ class TestOpenAIChatRoutes:
             data = response.json
             assert data['user_question'] == 'What is artificial intelligence?'
             assert data['ai_answer'] == 'Test AI response'
-            assert data['ai_model'] == 'gpt-3.5-turbo'
+            assert data['ai_model'] == 'gpt-4.1'
             assert data['ai_model_provider'] == 'OpenAI'
     
     def test_send_message_endpoint(self, client, auth_headers, test_chat):
@@ -422,7 +422,7 @@ class TestOpenAIChatRoutes:
             mock_openai.ChatCompletion.create.return_value = MagicMock(
                 choices=[MagicMock(message=MagicMock(content="Hello! How can I help you?"))],
                 usage=MagicMock(to_dict=lambda: {'total_tokens': 30}),
-                model='gpt-3.5-turbo',
+                model='gpt-4.1',
                 id='test-request-id'
             )
             
@@ -432,7 +432,7 @@ class TestOpenAIChatRoutes:
                 json={
                     'chat_id': test_chat.id,
                     'user_question': 'Hello, how are you?',
-                    'ai_model': 'gpt-3.5-turbo'
+                    'ai_model': 'gpt-4.1'
                 }
             )
             
@@ -451,7 +451,7 @@ class TestOpenAIChatRoutes:
             user_id=1,
             user_question="Test question",
             ai_answer="Test answer",
-            ai_model="gpt-3.5-turbo",
+            ai_model="gpt-4.1",
             ai_model_provider="OpenAI"
         )
         db.session.add(ai_chat)
@@ -476,7 +476,7 @@ class TestOpenAIChatRoutes:
             user_id=1,
             user_question="Original question",
             ai_answer="Original answer",
-            ai_model="gpt-3.5-turbo",
+            ai_model="gpt-4.1",
             ai_model_provider="OpenAI"
         )
         db.session.add(ai_chat)
@@ -504,7 +504,7 @@ class TestOpenAIChatRoutes:
             user_id=1,
             user_question="Test question",
             ai_answer="Test answer",
-            ai_model="gpt-3.5-turbo",
+            ai_model="gpt-4.1",
             ai_model_provider="OpenAI"
         )
         db.session.add(ai_chat)
@@ -532,7 +532,7 @@ class TestOpenAIChatRoutes:
                 user_id=1,
                 user_question=f"Question {i}",
                 ai_answer=f"Answer {i}",
-                ai_model="gpt-3.5-turbo",
+                ai_model="gpt-4.1",
                 ai_model_provider="OpenAI"
             )
             db.session.add(ai_chat)
@@ -612,18 +612,18 @@ class TestOpenAIIntegration:
         mock_openai.ChatCompletion.create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="AI response"))],
             usage=MagicMock(to_dict=lambda: {'total_tokens': 50}),
-            model='gpt-3.5-turbo',
+            model='gpt-4.1',
             id='test-id'
         )
         
         service = OpenAIChatService()
         service.openai_client = mock_openai
         
-        response = service._get_openai_response("Test question", "gpt-3.5-turbo")
+        response = service._get_openai_response("Test question", "gpt-4.1")
         
         assert response.success is True
         assert response.content == "AI response"
-        assert response.model == "gpt-3.5-turbo"
+        assert response.model == "gpt-4.1"
         assert response.usage['total_tokens'] == 50
     
     @patch('src.services.openai_chat_service.openai')
@@ -635,7 +635,7 @@ class TestOpenAIIntegration:
         service = OpenAIChatService()
         service.openai_client = mock_openai
         
-        response = service._get_openai_response("Test question", "gpt-3.5-turbo")
+        response = service._get_openai_response("Test question", "gpt-4.1")
         
         assert response.success is False
         assert "API Error" in response.error
@@ -645,7 +645,7 @@ class TestOpenAIIntegration:
         service = OpenAIChatService()
         service.openai_client = None
         
-        response = service._get_openai_response("Test question", "gpt-3.5-turbo")
+        response = service._get_openai_response("Test question", "gpt-4.1")
         
         assert response.success is False
         assert "not initialized" in response.error
@@ -709,7 +709,7 @@ class TestOpenAIEndToEnd:
             send_resp = client.post('/api/ai-chats/send-message', headers=headers, json={
                 'chat_id': chat_id,
                 'user_question': 'In one sentence, what is a contract?',
-                'ai_model': 'gpt-3.5-turbo'
+                'ai_model': 'gpt-4.1'
             })
             assert send_resp.status_code == 201
             ai_chat = send_resp.json.get('ai_chat')

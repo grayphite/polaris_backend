@@ -125,7 +125,8 @@ class OpenAIChatService:
             self.logger.warning(f"Failed to touch chat {chat_id}: {str(e)}")
 
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
-                      ai_model: str = "gpt-4.1", conversation_context: str = None) -> AIChatResult:
+                      ai_model: str = "gpt-4.1", conversation_context: str = None,
+                      context_limit: int = 10) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -134,7 +135,8 @@ class OpenAIChatService:
             user_id: ID of the user
             user_question: User's question
             ai_model: AI model to use (default: gpt-4.1)
-            conversation_context: Previous conversation context
+            conversation_context: Previous conversation context (if None, will auto-generate)
+            context_limit: Number of recent conversations to include in context (default: 10)
             
         Returns:
             AIChatResult with success status and AI chat data
@@ -158,6 +160,14 @@ class OpenAIChatService:
                 return AIChatResult(
                     success=False,
                     error="Chat not found or access denied"
+                )
+            
+            # Generate previous context if not provided
+            if not conversation_context:
+                conversation_context = self.generate_previous_context(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    context_limit=context_limit
                 )
             
             # Get AI response from OpenAI
@@ -591,6 +601,74 @@ class OpenAIChatService:
                 'error': error_msg
             }
 
+    def generate_previous_context(self, chat_id: int, user_id: int, 
+                                 context_limit: int = 10) -> str:
+        """
+        Generate previous conversation context from recent AI chats
+        
+        Args:
+            chat_id: ID of the chat to get context from
+            user_id: ID of the user requesting context
+            context_limit: Maximum number of recent AI chats to include (default: 10)
+            
+        Returns:
+            Formatted context string for OpenAI model, or empty string if no context
+        """
+        try:
+            # Validate input parameters
+            if context_limit <= 0:
+                self.logger.warning(f"Invalid context_limit {context_limit}, using default 10")
+                context_limit = 10
+            
+            if context_limit > 50:  # Reasonable upper limit
+                self.logger.warning(f"Context limit {context_limit} too high, capping at 50")
+                context_limit = 50
+            
+            # Verify user has access to the chat
+            if not self._verify_chat_access(chat_id, user_id):
+                self.logger.warning(f"User {user_id} does not have access to chat {chat_id}")
+                return ""
+            
+            # Query recent AI chats for this chat
+            recent_chats = AIChat.query.filter_by(
+                chat_id=chat_id,
+                user_id=user_id,
+                is_deleted=False
+            ).order_by(
+                AIChat.created_at.desc()
+            ).limit(context_limit).all()
+            
+            if not recent_chats:
+                self.logger.info(f"No previous AI chats found for chat {chat_id}")
+                return ""
+            
+            # Format the context for OpenAI
+            context_parts = []
+            context_parts.append("Previous conversation context:")
+            context_parts.append("")
+            
+            # Reverse to get chronological order (oldest first)
+            for ai_chat in reversed(recent_chats):
+                if ai_chat.user_question and ai_chat.ai_answer:
+                    context_parts.append(f"User: {ai_chat.user_question}")
+                    context_parts.append(f"Assistant: {ai_chat.ai_answer}")
+                    context_parts.append("")  # Empty line for separation
+            
+            # Remove the last empty line
+            if context_parts and context_parts[-1] == "":
+                context_parts.pop()
+            
+            context_string = "\n".join(context_parts)
+            
+            self.logger.info(f"Generated context for chat {chat_id} with {len(recent_chats)} previous conversations")
+            
+            return context_string
+            
+        except Exception as e:
+            error_msg = f"Error generating previous context: {str(e)}"
+            self.logger.error(error_msg)
+            return ""
+
     def _get_openai_response(self, user_question: str, model: str = "gpt-4.1",
                            conversation_context: str = None) -> OpenAIResponse:
         """
@@ -617,8 +695,18 @@ class OpenAIChatService:
             
             # Prepare messages
             messages = []
+            
+            # Create system prompt with instructions for clean, plain responses
+            system_prompt = "You are a helpful AI assistant. Respond in plain, clean text format without any markdown formatting, bold text, bullet points, or special formatting. Keep your responses conversational and natural, as if you're having a real-time chat conversation."
+            
             if conversation_context:
-                messages.append({"role": "system", "content": conversation_context})
+                # If conversation context is provided, combine it with system instructions
+                full_system_content = f"{system_prompt}\n\n{conversation_context}"
+                messages.append({"role": "system", "content": full_system_content})
+            else:
+                # Use only the system prompt if no context
+                messages.append({"role": "system", "content": system_prompt})
+            
             messages.append({"role": "user", "content": user_question})
             
             # Make API call using new OpenAI API format
@@ -665,7 +753,7 @@ class OpenAIChatService:
             # Test OpenAI API connectivity
             if self.openai_client:
                 # Simple test call
-                test_response = self._get_openai_response("Hello", "gpt-4.1")
+                test_response = self._get_openai_response("Hello", "gpt-4.1.1")
                 api_status = "healthy" if test_response.success else "unhealthy"
                 api_error = test_response.error if not test_response.success else None
             else:
