@@ -23,7 +23,7 @@ class AIChat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     
     # Foreign keys
-    chat_id = db.Column(db.Integer, db.ForeignKey('chats.id'), nullable=False, index=True)
+    chat_id = db.Column(db.Integer, db.ForeignKey('chats.id', ondelete='CASCADE'), nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     
     # Chat content
@@ -50,7 +50,7 @@ class AIChat(db.Model):
     deleted_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
     # Relationships
-    chat = db.relationship('Chat', backref='ai_conversations')
+    chat = db.relationship('Chat', back_populates='ai_conversations')
     user = db.relationship('User', foreign_keys=[user_id], backref='ai_chats')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_ai_chats')
     ai_stats = db.relationship('AIStats', back_populates='ai_chat', uselist=False, cascade='all, delete-orphan')

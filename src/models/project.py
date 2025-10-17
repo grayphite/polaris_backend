@@ -32,7 +32,7 @@ class Project(db.Model):
     # Relationships
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_projects')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_projects')
-    chats = db.relationship('Chat', back_populates='project', lazy='dynamic')
+    chats = db.relationship('Chat', back_populates='project', lazy='dynamic', cascade='all, delete-orphan')
     
     def __repr__(self):
         return f'<Project {self.id}: {self.name}>'
