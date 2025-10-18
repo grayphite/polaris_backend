@@ -88,6 +88,7 @@ class AIChat(db.Model):
             'ai_model': self.ai_model,
             'ai_model_provider': self.ai_model_provider,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted
         }
 
