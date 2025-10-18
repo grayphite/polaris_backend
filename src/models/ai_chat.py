@@ -38,6 +38,7 @@ class AIChat(db.Model):
     # Context and metadata
     context_metadata = db.Column(db.JSON, nullable=True)  # Additional AI response info
     conversation_context = db.Column(db.Text, nullable=True)  # Previous conversation context
+    file_references = db.Column(db.Text, nullable=True)  # JSON array of Anthropic file IDs used in this chat
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -80,6 +81,16 @@ class AIChat(db.Model):
     
     def to_summary_dict(self) -> Dict[str, Any]:
         """Convert to summary dictionary for list views"""
+        import json
+        
+        # Parse file_references if it exists
+        file_refs = []
+        if self.file_references:
+            try:
+                file_refs = json.loads(self.file_references)
+            except (json.JSONDecodeError, TypeError):
+                file_refs = []
+        
         return {
             'id': self.id,
             'chat_id': self.chat_id,
@@ -87,6 +98,7 @@ class AIChat(db.Model):
             'chat_name': self.chat_name,
             'ai_model': self.ai_model,
             'ai_model_provider': self.ai_model_provider,
+            'file_references': file_refs,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted

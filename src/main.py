@@ -45,6 +45,7 @@ def create_app():
     from src.routes.chat import chat_bp
     # from src.routes.openai_chat import openai_chat_bp  # Commented out - using Anthropic instead
     from src.routes.anthropic_chat import anthropic_chat_bp
+    from src.routes.file_upload import file_upload_bp
     # Skipping for now as not being used
     # from src.routes.cliente import cliente_bp
     # from src.routes.ai import ai_bp
@@ -57,6 +58,7 @@ def create_app():
     app.register_blueprint(chat_bp, url_prefix='/api')
     # app.register_blueprint(openai_chat_bp, url_prefix='/api')  # Commented out - using Anthropic instead
     app.register_blueprint(anthropic_chat_bp, url_prefix='/api')
+    app.register_blueprint(file_upload_bp, url_prefix='/api')
     # Skipping for now as not being used
     # app.register_blueprint(cliente_bp, url_prefix='/api')
     # app.register_blueprint(ai_bp, url_prefix='/api')

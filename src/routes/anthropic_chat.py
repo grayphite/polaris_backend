@@ -188,7 +188,7 @@ def get_ai_chat(ai_chat_id):
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['user_question'],
-    optional_fields=['conversation_context']
+    optional_fields=['conversation_context', 'file_references']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -202,7 +202,8 @@ def create_ai_chat(chat_id):
         chat_id=chat_id,
         user_id=current_user.id,
         user_question=data['user_question'],
-        conversation_context=data.get('conversation_context')
+        conversation_context=data.get('conversation_context'),
+        file_references=data.get('file_references')
     )
     
     if not result.success:
@@ -406,7 +407,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit']
+    optional_fields=['conversation_context', 'context_limit', 'file_references']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -414,8 +415,9 @@ def send_message():
     """
     Send a message to Anthropic Claude and create AI chat record
     
-    This is a convenience endpoint that combines message sending
-    and AI chat creation in one operation.
+    This is a unified endpoint that handles both simple chat and file-attached chat.
+    If file_references is provided in the payload, files will be included in the conversation.
+    Otherwise, it will be treated as a simple text-only chat.
     """
     current_user = get_current_user()
     data = request.validated_data
@@ -436,7 +438,8 @@ def send_message():
         user_id=current_user.id,
         user_question=data['user_question'],
         conversation_context=data.get('conversation_context'),
-        context_limit=context_limit
+        context_limit=context_limit,
+        file_references=data.get('file_references')
     )
     
     if not result.success:

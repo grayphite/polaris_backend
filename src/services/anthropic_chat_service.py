@@ -5,6 +5,7 @@ Handles CRUD operations for AI chat conversations with Anthropic Claude integrat
 Supports multiple AI models and providers with comprehensive statistics tracking.
 """
 
+import json
 import logging
 import os
 import time
@@ -50,7 +51,7 @@ class AnthropicChatService:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
         self.api_url = "https://api.anthropic.com/v1/messages"
-        self.model = "claude-3-5-haiku-20241022"
+        self.model = "claude-sonnet-4-5-20250929"
         self.max_tokens = 2000
         self._initialized = False
 
@@ -100,7 +101,8 @@ class AnthropicChatService:
             self.logger.warning(f"Failed to touch chat {chat_id}: {str(e)}")
 
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
-                      conversation_context: str = None, context_limit: int = 10) -> AIChatResult:
+                      conversation_context: str = None, context_limit: int = 10, 
+                      file_references: list = None) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -110,6 +112,7 @@ class AnthropicChatService:
             user_question: User's question
             conversation_context: Previous conversation context (if None, will auto-generate)
             context_limit: Number of recent conversations to include in context (default: 10)
+            file_references: List of Anthropic file IDs to include in the conversation
             
         Returns:
             AIChatResult with success status and AI chat data
@@ -135,6 +138,13 @@ class AnthropicChatService:
                     error="Chat not found or access denied"
                 )
             
+            # Validate file references if provided (simplified validation)
+            if file_references and not isinstance(file_references, list):
+                return AIChatResult(
+                    success=False,
+                    error="file_references must be a list of file IDs"
+                )
+            
             # Generate previous context if not provided
             if not conversation_context:
                 conversation_context = self.generate_previous_context(
@@ -145,7 +155,7 @@ class AnthropicChatService:
             
             # Get AI response from Anthropic Claude
             anthropic_response = self._get_anthropic_response(
-                user_question, self.model, conversation_context
+                user_question, self.model, conversation_context, file_references
             )
             
             if not anthropic_response.success:
@@ -167,10 +177,12 @@ class AnthropicChatService:
                 ai_model=self.model,
                 ai_model_provider="Anthropic",
                 conversation_context=conversation_context,
+                file_references=json.dumps(file_references) if file_references else None,
                 context_metadata={
                     'api_version': '2023-06-01',
                     'request_timestamp': datetime.now(timezone.utc).isoformat(),
-                    'model_used': self.model
+                    'model_used': self.model,
+                    'file_count': len(file_references) if file_references else 0
                 }
             )
             
@@ -737,7 +749,7 @@ Name:"""
             return "AI Chat"
 
     def _get_anthropic_response(self, user_question: str, model: str = "claude-3-haiku-20240307",
-                               conversation_context: str = None) -> AnthropicResponse:
+                               conversation_context: str = None, file_references: list = None) -> AnthropicResponse:
         """
         Get response from Anthropic Claude API
         
@@ -745,6 +757,7 @@ Name:"""
             user_question: User's question
             model: Anthropic model to use
             conversation_context: Previous conversation context
+            file_references: List of Anthropic file IDs to include in the conversation
             
         Returns:
             AnthropicResponse with API response data
@@ -770,8 +783,29 @@ Name:"""
             headers = {
                 "Content-Type": "application/json",
                 "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01"
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "files-api-2025-04-14"
             }
+            
+            # Prepare message content
+            message_content = []
+            
+            # Add file references if provided
+            if file_references:
+                for file_id in file_references:
+                    message_content.append({
+                        "type": "document",
+                        "source": {
+                            "type": "file",
+                            "file_id": file_id
+                        }
+                    })
+            
+            # Add text content
+            message_content.append({
+                "type": "text",
+                "text": full_prompt
+            })
             
             # Prepare payload
             payload = {
@@ -780,7 +814,7 @@ Name:"""
                 "messages": [
                     {
                         "role": "user",
-                        "content": full_prompt
+                        "content": message_content
                     }
                 ]
             }
