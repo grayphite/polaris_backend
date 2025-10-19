@@ -61,6 +61,16 @@ class AIChat(db.Model):
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert AIChat to dictionary representation"""
+        import json
+        
+        # Parse file_references if it exists
+        file_refs = []
+        if self.file_references:
+            try:
+                file_refs = json.loads(self.file_references)
+            except (json.JSONDecodeError, TypeError):
+                file_refs = []
+        
         return {
             'id': self.id,
             'chat_id': self.chat_id,
@@ -72,6 +82,7 @@ class AIChat(db.Model):
             'ai_model_provider': self.ai_model_provider,
             'context_metadata': self.context_metadata,
             'conversation_context': self.conversation_context,
+            'file_references': file_refs,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted,
