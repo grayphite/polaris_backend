@@ -188,7 +188,7 @@ def get_ai_chat(ai_chat_id):
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['user_question'],
-    optional_fields=['conversation_context', 'file_references']
+    optional_fields=['conversation_context', 'file_references', 'file_reference_details']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -203,7 +203,8 @@ def create_ai_chat(chat_id):
         user_id=current_user.id,
         user_question=data['user_question'],
         conversation_context=data.get('conversation_context'),
-        file_references=data.get('file_references')
+        file_references=data.get('file_references'),
+        file_reference_details=data.get('file_reference_details')
     )
     
     if not result.success:
@@ -407,7 +408,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -439,7 +440,8 @@ def send_message():
         user_question=data['user_question'],
         conversation_context=data.get('conversation_context'),
         context_limit=context_limit,
-        file_references=data.get('file_references')
+        file_references=data.get('file_references'),
+        file_reference_details=data.get('file_reference_details')
     )
     
     if not result.success:

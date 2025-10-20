@@ -103,7 +103,7 @@ class AnthropicChatService:
 
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
                       conversation_context: str = None, context_limit: int = 10, 
-                      file_references: list = None) -> AIChatResult:
+                      file_references: list = None, file_reference_details: list = None) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -139,6 +139,29 @@ class AnthropicChatService:
                     error="Chat not found or access denied"
                 )
             
+            # Handle file_reference_details - extract file_references automatically
+            if file_reference_details is not None:
+                if not isinstance(file_reference_details, list) or not all(isinstance(it, dict) for it in file_reference_details):
+                    return AIChatResult(
+                        success=False,
+                        error="file_reference_details must be a list of objects"
+                    )
+                
+                # Extract file IDs from file_reference_details if file_references not provided
+                if not file_references:
+                    try:
+                        file_references = [item.get('id') for item in file_reference_details if item.get('id')]
+                        if not file_references:
+                            return AIChatResult(
+                                success=False,
+                                error="file_reference_details objects must contain 'id' field"
+                            )
+                    except Exception as e:
+                        return AIChatResult(
+                            success=False,
+                            error=f"Error extracting file IDs from file_reference_details: {str(e)}"
+                        )
+            
             # Validate file references if provided (simplified validation)
             if file_references and not isinstance(file_references, list):
                 return AIChatResult(
@@ -154,12 +177,56 @@ class AnthropicChatService:
                     context_limit=context_limit
                 )
             
-            # Optimize context using tokenizer service
+            # Optimize context using tokenizer service (pass the same system prompt we'll use)
+            system_context = (
+                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
+                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
+                "CORE PRINCIPLES:\n"
+                "- Provide precise, legally accurate information based on established legal principles\n"
+                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
+                "- Maintain professional, clear language appropriate for legal contexts\n"
+                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
+                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
+                "RESPONSE FORMAT:\n"
+                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
+                "- Be concise yet comprehensive enough to address the legal query fully\n"
+                "- Structure responses logically: key findings first, followed by supporting details\n"
+                "- Use clear paragraph breaks for readability\n\n"
+                "DOCUMENT ANALYSIS APPROACH:\n"
+                "When analyzing legal documents, identify and explain:\n"
+                "- Main legal purpose and document type\n"
+                "- Key parties, roles, and their obligations\n"
+                "- Critical terms, conditions, and requirements\n"
+                "- Important dates, deadlines, and time-sensitive provisions\n"
+                "- Legal rights, remedies, and liabilities\n"
+                "- Potential legal risks, ambiguities, or areas requiring attention\n"
+                "- Relevant jurisdictional law or governing provisions\n"
+                "- Cross-references to related clauses or external legal requirements\n\n"
+                "GENERAL LEGAL QUESTIONS:\n"
+                "When answering legal questions:\n"
+                "- Provide clear explanations of legal concepts and terminology\n"
+                "- Reference applicable laws, regulations, or legal standards\n"
+                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
+                "- Explain practical implications and typical legal outcomes\n"
+                "- Identify when professional legal counsel should be consulted\n\n"
+                "CRITICAL LIMITATIONS:\n"
+                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
+                "- State when information may be jurisdiction-dependent or time-sensitive\n"
+                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
+                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
+                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
+                "TONE AND STYLE:\n"
+                "- Professional and objective\n"
+                "- Clear and accessible while maintaining legal accuracy\n"
+                "- Respectful and neutral\n"
+                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            )
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
                 context=conversation_context,
                 file_references=file_references,
-                model=self.model
+                model=self.model,
+                system_prompt=system_context
             )
             
             # Log token usage and optimization
@@ -197,6 +264,7 @@ class AnthropicChatService:
                 ai_model_provider="Anthropic",
                 conversation_context=conversation_context,
                 file_references=json.dumps(file_references) if file_references else None,
+                file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
                 context_metadata={
                     'api_version': '2023-06-01',
                     'request_timestamp': datetime.now(timezone.utc).isoformat(),
@@ -708,10 +776,10 @@ class AnthropicChatService:
                 self.logger.warning("Anthropic API key not configured, using fallback name")
                 return self._generate_fallback_name(user_question)
             
-            # Create a specific prompt for name generation
-            name_prompt = f"""Generate a concise, descriptive name for this conversation based on the user's question. 
-The name should be 2-5 words that capture the main topic or intent.
-Do not include any formatting, quotes, or extra text - just return the name.
+            # Create a specific prompt for name generation (legal-focused)
+            name_prompt = f"""Generate a concise, descriptive name for this legal conversation based on the user's question. 
+The name should be 2-5 words that capture the main legal topic, document type, or legal issue.
+Focus on legal terminology and concepts. Do not include any formatting, quotes, or extra text - just return the name.
 
 User question: {user_question}
 
@@ -805,7 +873,58 @@ Name:"""
         try:
             start_time = time.time()
             
-            # Prepare the full prompt
+            # Prepare the system prompt (sent via Claude "system" field)
+            system_context = (
+                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
+                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
+
+                "CORE PRINCIPLES:\n"
+                "- Provide precise, legally accurate information based on established legal principles\n"
+                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
+                "- Maintain professional, clear language appropriate for legal contexts\n"
+                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
+                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
+
+                "RESPONSE FORMAT:\n"
+                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
+                "- Be concise yet comprehensive enough to address the legal query fully\n"
+                "- Structure responses logically: key findings first, followed by supporting details\n"
+                "- Use clear paragraph breaks for readability\n\n"
+
+                "DOCUMENT ANALYSIS APPROACH:\n"
+                "When analyzing legal documents, identify and explain:\n"
+                "- Main legal purpose and document type\n"
+                "- Key parties, roles, and their obligations\n"
+                "- Critical terms, conditions, and requirements\n"
+                "- Important dates, deadlines, and time-sensitive provisions\n"
+                "- Legal rights, remedies, and liabilities\n"
+                "- Potential legal risks, ambiguities, or areas requiring attention\n"
+                "- Relevant jurisdictional law or governing provisions\n"
+                "- Cross-references to related clauses or external legal requirements\n\n"
+
+                "GENERAL LEGAL QUESTIONS:\n"
+                "When answering legal questions:\n"
+                "- Provide clear explanations of legal concepts and terminology\n"
+                "- Reference applicable laws, regulations, or legal standards\n"
+                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
+                "- Explain practical implications and typical legal outcomes\n"
+                "- Identify when professional legal counsel should be consulted\n\n"
+
+                "CRITICAL LIMITATIONS:\n"
+                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
+                "- State when information may be jurisdiction-dependent or time-sensitive\n"
+                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
+                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
+                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
+
+                "TONE AND STYLE:\n"
+                "- Professional and objective\n"
+                "- Clear and accessible while maintaining legal accuracy\n"
+                "- Respectful and neutral\n"
+                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            )
+
+            # Build the user message content (no system text embedded)
             if conversation_context:
                 full_prompt = f"{conversation_context}\n\nHuman: {user_question}\n\nAssistant:"
             else:
@@ -843,6 +962,7 @@ Name:"""
             payload = {
                 "model": model,
                 "max_tokens": self.max_tokens,
+                "system": system_context,
                 "messages": [
                     {
                         "role": "user",

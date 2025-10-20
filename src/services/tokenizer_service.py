@@ -58,20 +58,32 @@ class AnthropicTokenizerService:
         else:
             self.client = Anthropic(api_key=self.api_key)
         
-        # Token limits configuration
-        self.max_context_tokens = int(os.getenv('ANTHROPIC_MAX_CONTEXT_TOKENS', '8000'))
-        self.max_user_question_tokens = int(os.getenv('ANTHROPIC_MAX_USER_QUESTION_TOKENS', '2000'))
-        self.max_total_tokens = int(os.getenv('ANTHROPIC_MAX_TOTAL_TOKENS', '10000'))
+        # Production-oriented token limits (env-overridable)
+        self.max_context_tokens = int(os.getenv('ANTHROPIC_MAX_CONTEXT_TOKENS', '25000'))
+        self.max_user_question_tokens = int(os.getenv('ANTHROPIC_MAX_USER_QUESTION_TOKENS', '5000'))
+        self.max_document_tokens = int(os.getenv('ANTHROPIC_MAX_DOCUMENT_TOKENS', '50000'))
+        self.max_output_tokens = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8000'))
+        self.max_total_tokens = int(os.getenv('ANTHROPIC_MAX_TOTAL_TOKENS', '90000'))
         
         # Context management settings
-        self.target_context_tokens = int(os.getenv('ANTHROPIC_TARGET_CONTEXT_TOKENS', '5000'))
+        self.target_context_tokens = int(os.getenv('ANTHROPIC_TARGET_CONTEXT_TOKENS', '20000'))
         self.min_messages_to_keep = int(os.getenv('ANTHROPIC_MIN_MESSAGES_TO_KEEP', '2'))
-        self.max_messages_to_keep = int(os.getenv('ANTHROPIC_MAX_MESSAGES_TO_KEEP', '10'))
+        self.max_messages_to_keep = int(os.getenv('ANTHROPIC_MAX_MESSAGES_TO_KEEP', '15'))
+        self.token_buffer = int(os.getenv('ANTHROPIC_TOKEN_BUFFER', '1000'))
         
-        logger.info(f"AnthropicTokenizerService initialized with limits: "
-                   f"context={self.max_context_tokens}, "
-                   f"user_question={self.max_user_question_tokens}, "
-                   f"total={self.max_total_tokens}")
+        # Optional TikToken fallback for better local estimates
+        try:
+            import tiktoken  # type: ignore
+            self.tiktoken_encoding = tiktoken.get_encoding("cl100k_base")
+            logger.info("TikToken loaded for fallback token counting")
+        except Exception:
+            self.tiktoken_encoding = None
+            logger.warning("TikToken not available - using character-based estimation")
+        
+        logger.info(
+            f"AnthropicTokenizerService initialized with limits: context={self.max_context_tokens}, "
+            f"user_question={self.max_user_question_tokens}, document={self.max_document_tokens}, total={self.max_total_tokens}"
+        )
     
     def count_tokens(self, text: str, model: str = None) -> int:
         """
@@ -89,7 +101,13 @@ class AnthropicTokenizerService:
                 return 0
             
             if not self.client:
-                # Fallback: rough estimation (1 token ≈ 4 characters for English)
+                # Fallback chain: TikToken → char-based
+                if hasattr(self, 'tiktoken_encoding') and self.tiktoken_encoding:
+                    try:
+                        return len(self.tiktoken_encoding.encode(text))
+                    except Exception:
+                        pass
+                # Rough estimation (1 token ≈ 4 chars)
                 return len(text) // 4
             
             model = model or "claude-sonnet-4-5-20250929"
@@ -103,7 +121,12 @@ class AnthropicTokenizerService:
             return response.input_tokens
         except Exception as e:
             logger.error(f"Error counting tokens: {str(e)}")
-            # Fallback: rough estimation (1 token ≈ 4 characters for English)
+            # Fallback chain
+            if hasattr(self, 'tiktoken_encoding') and self.tiktoken_encoding:
+                try:
+                    return len(self.tiktoken_encoding.encode(text))
+                except Exception:
+                    pass
             return len(text) // 4
     
     def count_tokens_in_messages(self, messages: List[Dict[str, Any]], model: str = None) -> int:
@@ -183,12 +206,12 @@ class AnthropicTokenizerService:
                     total_tokens += self.count_tokens(str(message))
             return total_tokens
     
-    def estimate_file_reference_tokens(self, file_references: List[str]) -> int:
+    def estimate_file_reference_tokens(self, file_references: List[Any]) -> int:
         """
         Estimate tokens for file references
         
         Args:
-            file_references: List of file IDs
+            file_references: List of file IDs or detail dicts
             
         Returns:
             Estimated token count
@@ -196,12 +219,28 @@ class AnthropicTokenizerService:
         if not file_references:
             return 0
         
-        # File references add overhead for document processing
-        # Rough estimation: 50 tokens per file reference
-        return len(file_references) * 50
+        total_tokens = 0
+        for ref in file_references:
+            if isinstance(ref, dict):
+                total_tokens += 50  # base structure overhead
+                # Prefer explicit estimate if provided
+                est = ref.get('estimated_tokens')
+                if isinstance(est, int) and est > 0:
+                    total_tokens += est
+                elif 'size_bytes' in ref and isinstance(ref.get('size_bytes'), int):
+                    # Rough estimate for text: ~1 token per 4 bytes
+                    total_tokens += max(0, ref['size_bytes'] // 4)
+                else:
+                    # Conservative default for unknown sizes
+                    total_tokens += 5000
+            else:
+                # Simple file id
+                total_tokens += 50
+        return total_tokens
     
     def calculate_token_usage(self, user_question: str, context: str = None, 
-                            file_references: List[str] = None, model: str = None) -> TokenUsage:
+                            file_references: List[Any] = None, model: str = None,
+                            system_prompt: Optional[str] = None) -> TokenUsage:
         """
         Calculate comprehensive token usage using Anthropic's official API
         
@@ -231,8 +270,11 @@ class AnthropicTokenizerService:
             "content": user_question
         })
         
-        # System prompt (estimated)
-        system_prompt = "You are a helpful AI assistant."
+        # System prompt for counting (match actual request prompt when provided)
+        TOKEN_COUNTING_SYSTEM_PROMPT = system_prompt or (
+            "You are a token counting assistant. This is a system message used only for "
+            "accurate token calculation and will not generate any response."
+        )
         
         try:
             if not self.client:
@@ -240,7 +282,7 @@ class AnthropicTokenizerService:
                 user_question_tokens = self.count_tokens(user_question, model)
                 context_tokens = self.count_tokens(context, model) if context else 0
                 file_references_tokens = self.estimate_file_reference_tokens(file_references)
-                system_prompt_tokens = self.count_tokens(system_prompt, model)
+                system_prompt_tokens = self.count_tokens(TOKEN_COUNTING_SYSTEM_PROMPT, model)
                 
                 total_tokens = (user_question_tokens + context_tokens + 
                                file_references_tokens + system_prompt_tokens)
@@ -256,12 +298,12 @@ class AnthropicTokenizerService:
             # Use Anthropic's official token counting API
             response = self.client.messages.count_tokens(
                 model=model,
-                system=system_prompt,
+                system=TOKEN_COUNTING_SYSTEM_PROMPT,
                 messages=messages
             )
             
             total_tokens = response.input_tokens
-            system_prompt_tokens = self.count_tokens(system_prompt, model)
+            system_prompt_tokens = self.count_tokens(TOKEN_COUNTING_SYSTEM_PROMPT, model)
             user_question_tokens = self.count_tokens(user_question, model)
             context_tokens = self.count_tokens(context, model) if context else 0
             file_references_tokens = self.estimate_file_reference_tokens(file_references)
@@ -280,7 +322,8 @@ class AnthropicTokenizerService:
             user_question_tokens = self.count_tokens(user_question, model)
             context_tokens = self.count_tokens(context, model) if context else 0
             file_references_tokens = self.estimate_file_reference_tokens(file_references)
-            system_prompt_tokens = 100  # Rough estimate
+            # Fallback estimate for system prompt
+            system_prompt_tokens = self.count_tokens(TOKEN_COUNTING_SYSTEM_PROMPT, model)
             
             total_tokens = (user_question_tokens + context_tokens + 
                            file_references_tokens + system_prompt_tokens)
@@ -351,28 +394,42 @@ class AnthropicTokenizerService:
         return max(human_count, assistant_count)
     
     def _parse_context_messages(self, context: str) -> List[Dict[str, str]]:
-        """Parse context into individual messages"""
+        """Parse context into individual messages - supports multiple formats"""
+        if not context or not context.strip():
+            return []
+        # JSON array of messages
+        if context.lstrip().startswith('['):
+            try:
+                import json
+                arr = json.loads(context)
+                if isinstance(arr, list):
+                    out = []
+                    for m in arr:
+                        if isinstance(m, dict):
+                            role = m.get('role', 'user')
+                            content = m.get('content', '')
+                            out.append({'role': role, 'content': content})
+                    return out
+            except Exception:
+                pass
+        # Human:/Assistant: format
         messages = []
         lines = context.split('\n')
         current_message = None
-        
         for line in lines:
             line = line.strip()
             if line.startswith("Human:"):
                 if current_message:
                     messages.append(current_message)
-                current_message = {"role": "human", "content": line[6:].strip()}
+                current_message = {"role": "user", "content": line[6:].strip()}
             elif line.startswith("Assistant:"):
                 if current_message:
                     messages.append(current_message)
                 current_message = {"role": "assistant", "content": line[10:].strip()}
             elif current_message and line:
-                # Continue current message
                 current_message["content"] += " " + line
-        
         if current_message:
             messages.append(current_message)
-        
         return messages
     
     def _truncate_messages_intelligently(self, messages: List[Dict[str, str]], 
@@ -423,7 +480,8 @@ class AnthropicTokenizerService:
         return "\n\n".join(context_parts)
     
     def validate_token_limits(self, user_question: str, context: str = None, 
-                            file_references: List[str] = None) -> Tuple[bool, str, TokenUsage]:
+                            file_references: List[Any] = None,
+                            system_prompt: Optional[str] = None) -> Tuple[bool, str, TokenUsage]:
         """
         Validate if the request fits within token limits
         
@@ -435,7 +493,7 @@ class AnthropicTokenizerService:
         Returns:
             Tuple of (is_valid, error_message, token_usage)
         """
-        token_usage = self.calculate_token_usage(user_question, context, file_references)
+        token_usage = self.calculate_token_usage(user_question, context, file_references, system_prompt=system_prompt)
         
         # Check individual limits
         if token_usage.user_question_tokens > self.max_user_question_tokens:
@@ -450,7 +508,8 @@ class AnthropicTokenizerService:
         return True, "", token_usage
     
     def optimize_context_for_request(self, user_question: str, context: str = None, 
-                                   file_references: List[str] = None, model: str = None) -> Tuple[str, TokenUsage, ContextTruncationResult]:
+                                   file_references: List[Any] = None, model: str = None,
+                                   system_prompt: Optional[str] = None) -> Tuple[str, TokenUsage, ContextTruncationResult]:
         """
         Optimize context to fit within token limits while preserving important information
         
@@ -463,7 +522,7 @@ class AnthropicTokenizerService:
             Tuple of (optimized_context, token_usage, truncation_result)
         """
         # Calculate initial token usage
-        token_usage = self.calculate_token_usage(user_question, context, file_references, model)
+        token_usage = self.calculate_token_usage(user_question, context, file_references, model, system_prompt)
         
         # If within limits, return as-is
         if token_usage.total_tokens <= self.max_total_tokens:
@@ -487,7 +546,8 @@ class AnthropicTokenizerService:
             user_question, 
             truncation_result.truncated_context, 
             file_references,
-            model
+            model,
+            system_prompt
         )
         
         logger.info(f"Context optimized: {truncation_result.messages_skipped} messages skipped, "
@@ -501,13 +561,58 @@ class AnthropicTokenizerService:
             "limits": {
                 "max_context_tokens": self.max_context_tokens,
                 "max_user_question_tokens": self.max_user_question_tokens,
+                "max_document_tokens": getattr(self, 'max_document_tokens', None),
+                "max_output_tokens": getattr(self, 'max_output_tokens', None),
                 "max_total_tokens": self.max_total_tokens,
-                "target_context_tokens": self.target_context_tokens
+                "target_context_tokens": self.target_context_tokens,
+                "token_buffer": getattr(self, 'token_buffer', None)
             },
             "context_management": {
                 "min_messages_to_keep": self.min_messages_to_keep,
                 "max_messages_to_keep": self.max_messages_to_keep
             }
+        }
+
+    # Additional helpers
+    def validate_document_tokens(self, document_content: str, document_name: str = "Document") -> Tuple[bool, str, int]:
+        token_count = self.count_tokens(document_content)
+        if hasattr(self, 'max_document_tokens') and token_count > self.max_document_tokens:
+            return (
+                False,
+                f"{document_name} too large: {token_count:,} tokens (max: {self.max_document_tokens:,})",
+                token_count,
+            )
+        # warning log if >85%
+        try:
+            warning_threshold = int(self.max_document_tokens * 0.85)
+            if token_count > warning_threshold:
+                logger.warning(
+                    f"{document_name} is large: {token_count:,} tokens "
+                    f"({(token_count/self.max_document_tokens)*100:.1f}% of limit)"
+                )
+        except Exception:
+            pass
+        return True, "", token_count
+
+    def estimate_cost(self, token_usage: TokenUsage, estimated_output_tokens: Optional[int] = None) -> Dict[str, Any]:
+        estimated_output_tokens = estimated_output_tokens or getattr(self, 'max_output_tokens', 0) or 0
+        # Example pricing; adjust as needed
+        INPUT_COST_PER_MILLION = 3.00
+        OUTPUT_COST_PER_MILLION = 15.00
+        input_cost = (token_usage.total_tokens / 1_000_000) * INPUT_COST_PER_MILLION
+        output_cost = (estimated_output_tokens / 1_000_000) * OUTPUT_COST_PER_MILLION
+        total_cost = input_cost + output_cost
+        return {
+            "input_tokens": token_usage.total_tokens,
+            "estimated_output_tokens": estimated_output_tokens,
+            "input_cost": round(input_cost, 6),
+            "output_cost": round(output_cost, 6),
+            "total_cost": round(total_cost, 6),
+            "formatted": {
+                "input": f"${input_cost:.6f}",
+                "output": f"${output_cost:.6f}",
+                "total": f"${total_cost:.6f}",
+            },
         }
 
 

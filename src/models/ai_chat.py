@@ -39,6 +39,7 @@ class AIChat(db.Model):
     context_metadata = db.Column(db.JSON, nullable=True)  # Additional AI response info
     conversation_context = db.Column(db.Text, nullable=True)  # Previous conversation context
     file_references = db.Column(db.Text, nullable=True)  # JSON array of Anthropic file IDs used in this chat
+    file_reference_details = db.Column(db.Text, nullable=True)  # JSON array of file detail dicts from upload API (id, filename, mime_type, size_bytes, etc.)
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -71,6 +72,14 @@ class AIChat(db.Model):
             except (json.JSONDecodeError, TypeError):
                 file_refs = []
         
+        # Parse file_reference_details if it exists
+        file_details = []
+        if self.file_reference_details:
+            try:
+                file_details = json.loads(self.file_reference_details)
+            except (json.JSONDecodeError, TypeError):
+                file_details = []
+        
         return {
             'id': self.id,
             'chat_id': self.chat_id,
@@ -83,6 +92,7 @@ class AIChat(db.Model):
             'context_metadata': self.context_metadata,
             'conversation_context': self.conversation_context,
             'file_references': file_refs,
+            'file_reference_details': file_details,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted,
@@ -102,6 +112,14 @@ class AIChat(db.Model):
             except (json.JSONDecodeError, TypeError):
                 file_refs = []
         
+        # Parse file_reference_details if it exists
+        file_details = []
+        if self.file_reference_details:
+            try:
+                file_details = json.loads(self.file_reference_details)
+            except (json.JSONDecodeError, TypeError):
+                file_details = []
+        
         return {
             'id': self.id,
             'chat_id': self.chat_id,
@@ -110,6 +128,7 @@ class AIChat(db.Model):
             'ai_model': self.ai_model,
             'ai_model_provider': self.ai_model_provider,
             'file_references': file_refs,
+            'file_reference_details': file_details,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted
