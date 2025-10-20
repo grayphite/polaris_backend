@@ -19,6 +19,7 @@ from src.extensions import db
 from src.models.ai_chat import AIChat, AIStats
 from src.models.chat import Chat
 from src.models.user import User
+from src.services.tokenizer_service import tokenizer_service
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +154,27 @@ class AnthropicChatService:
                     context_limit=context_limit
                 )
             
+            # Optimize context using tokenizer service
+            optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
+                user_question=user_question,
+                context=conversation_context,
+                file_references=file_references,
+                model=self.model
+            )
+            
+            # Log token usage and optimization
+            self.logger.info(f"Token usage - Total: {token_usage.total_tokens}, "
+                           f"Context: {token_usage.context_tokens}, "
+                           f"User question: {token_usage.user_question_tokens}, "
+                           f"File refs: {token_usage.file_references_tokens}")
+            
+            if truncation_result.messages_skipped > 0:
+                self.logger.info(f"Context truncated: {truncation_result.messages_skipped} messages skipped, "
+                               f"{truncation_result.tokens_saved} tokens saved")
+            
             # Get AI response from Anthropic Claude
             anthropic_response = self._get_anthropic_response(
-                user_question, self.model, conversation_context, file_references
+                user_question, self.model, optimized_context, file_references
             )
             
             if not anthropic_response.success:
@@ -182,7 +201,20 @@ class AnthropicChatService:
                     'api_version': '2023-06-01',
                     'request_timestamp': datetime.now(timezone.utc).isoformat(),
                     'model_used': self.model,
-                    'file_count': len(file_references) if file_references else 0
+                    'file_count': len(file_references) if file_references else 0,
+                    'token_usage': {
+                        'total_tokens': token_usage.total_tokens,
+                        'context_tokens': token_usage.context_tokens,
+                        'user_question_tokens': token_usage.user_question_tokens,
+                        'file_references_tokens': token_usage.file_references_tokens,
+                        'system_prompt_tokens': token_usage.system_prompt_tokens
+                    },
+                    'context_optimization': {
+                        'messages_included': truncation_result.messages_included,
+                        'messages_skipped': truncation_result.messages_skipped,
+                        'tokens_saved': truncation_result.tokens_saved,
+                        'context_truncated': truncation_result.messages_skipped > 0
+                    }
                 }
             )
             
