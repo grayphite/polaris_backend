@@ -55,6 +55,30 @@ class AnthropicChatService:
         self.model = "claude-sonnet-4-5-20250929"
         self.max_tokens = 2000
         self._initialized = False
+        
+        # Streaming configuration (aligned with Anthropic production model)
+        # Based on Anthropic's actual production capabilities for millions of users
+        self.streaming_timeout = int(os.getenv('ANTHROPIC_STREAMING_TIMEOUT', '300'))  # 5 minutes (Anthropic's max)
+        self.streaming_chunk_size = int(os.getenv('ANTHROPIC_STREAMING_CHUNK_SIZE', '4096'))  # 4KB chunks (optimal for SSE)
+        self.max_concurrent_streams = int(os.getenv('ANTHROPIC_MAX_CONCURRENT_STREAMS', '1000'))  # Scale for millions
+        # Compression disabled by default for streaming to avoid ERR_CONTENT_DECODING_FAILED
+        self.enable_streaming_compression = os.getenv('ANTHROPIC_ENABLE_STREAMING_COMPRESSION', 'false').lower() == 'true'
+        
+        # Production-grade rate limiting (aligned with Anthropic's limits)
+        self.streaming_rate_limit = int(os.getenv('ANTHROPIC_STREAMING_RATE_LIMIT', '100'))  # 100/hour per user
+        self.regular_rate_limit = int(os.getenv('ANTHROPIC_REGULAR_RATE_LIMIT', '200'))  # 200/hour per user
+        
+        # Connection pooling for high-scale production
+        self.connection_pool_size = int(os.getenv('ANTHROPIC_CONNECTION_POOL_SIZE', '50'))
+        self.connection_pool_maxsize = int(os.getenv('ANTHROPIC_CONNECTION_POOL_MAXSIZE', '100'))
+        
+        # Memory optimization for millions of users
+        self.stream_buffer_size = int(os.getenv('ANTHROPIC_STREAM_BUFFER_SIZE', '8192'))  # 8KB buffer
+        self.max_stream_duration = int(os.getenv('ANTHROPIC_MAX_STREAM_DURATION', '600'))  # 10 minutes max
+        
+        # Anthropic API version alignment
+        self.anthropic_version = "2023-06-01"  # Latest stable version
+        self.anthropic_beta = "files-api-2025-04-14"  # Latest beta features
 
     def _ensure_initialized(self):
         """Lazy initialization of Anthropic client"""
@@ -100,6 +124,328 @@ class AnthropicChatService:
                 chat.updated_at = datetime.now(timezone.utc)
         except Exception as e:
             self.logger.warning(f"Failed to touch chat {chat_id}: {str(e)}")
+
+    def create_ai_chat_stream(self, chat_id: int, user_id: int, user_question: str,
+                             conversation_context: str = None, context_limit: int = 10, 
+                             file_references: list = None, file_reference_details: list = None):
+        """
+        Create a streaming AI chat conversation
+        
+        Args:
+            chat_id: ID of the parent chat
+            user_id: ID of the user
+            user_question: User's question
+            conversation_context: Previous conversation context (if None, will auto-generate)
+            context_limit: Number of recent conversations to include in context (default: 10)
+            file_references: List of Anthropic file IDs to include in the conversation
+            file_reference_details: Detailed file reference information
+            
+        Yields:
+            Dict: Streaming response data with metadata
+        """
+        try:
+            # Validate input
+            if not user_question or not user_question.strip():
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "validation_error",
+                        "message": "User question is required"
+                    }
+                }
+                return
+            
+            if len(user_question) > 10000:
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "validation_error",
+                        "message": "User question is too long (max 10,000 characters)"
+                    }
+                }
+                return
+            
+            # Verify chat access
+            if not self._verify_chat_access(chat_id, user_id):
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "access_denied",
+                        "message": "Chat not found or access denied"
+                    }
+                }
+                return
+            
+            # Handle file_reference_details - extract file_references automatically
+            if file_reference_details is not None:
+                if not isinstance(file_reference_details, list) or not all(isinstance(it, dict) for it in file_reference_details):
+                    yield {
+                        "type": "error",
+                        "error": {
+                            "type": "validation_error",
+                            "message": "file_reference_details must be a list of objects"
+                        }
+                    }
+                    return
+                
+                # Extract file IDs from file_reference_details if file_references not provided
+                if not file_references:
+                    try:
+                        file_references = [item.get('id') for item in file_reference_details if item.get('id')]
+                        if not file_references:
+                            yield {
+                                "type": "error",
+                                "error": {
+                                    "type": "validation_error",
+                                    "message": "file_reference_details objects must contain 'id' field"
+                                }
+                            }
+                            return
+                    except Exception as e:
+                        yield {
+                            "type": "error",
+                            "error": {
+                                "type": "validation_error",
+                                "message": f"Error extracting file IDs from file_reference_details: {str(e)}"
+                            }
+                        }
+                        return
+            
+            # Validate file references if provided
+            if file_references and not isinstance(file_references, list):
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "validation_error",
+                        "message": "file_references must be a list of file IDs"
+                    }
+                }
+                return
+            
+            # Generate previous context if not provided
+            if not conversation_context:
+                conversation_context = self.generate_previous_context(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    context_limit=context_limit
+                )
+            
+            # Optimize context using tokenizer service
+            system_context = (
+                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
+                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
+                "CORE PRINCIPLES:\n"
+                "- Provide precise, legally accurate information based on established legal principles\n"
+                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
+                "- Maintain professional, clear language appropriate for legal contexts\n"
+                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
+                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
+                "RESPONSE FORMAT:\n"
+                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
+                "- Be concise yet comprehensive enough to address the legal query fully\n"
+                "- Structure responses logically: key findings first, followed by supporting details\n"
+                "- Use clear paragraph breaks for readability\n\n"
+                "DOCUMENT ANALYSIS APPROACH:\n"
+                "When analyzing legal documents, identify and explain:\n"
+                "- Main legal purpose and document type\n"
+                "- Key parties, roles, and their obligations\n"
+                "- Critical terms, conditions, and requirements\n"
+                "- Important dates, deadlines, and time-sensitive provisions\n"
+                "- Legal rights, remedies, and liabilities\n"
+                "- Potential legal risks, ambiguities, or areas requiring attention\n"
+                "- Relevant jurisdictional law or governing provisions\n"
+                "- Cross-references to related clauses or external legal requirements\n\n"
+                "GENERAL LEGAL QUESTIONS:\n"
+                "When answering legal questions:\n"
+                "- Provide clear explanations of legal concepts and terminology\n"
+                "- Reference applicable laws, regulations, or legal standards\n"
+                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
+                "- Explain practical implications and typical legal outcomes\n"
+                "- Identify when professional legal counsel should be consulted\n\n"
+                "CRITICAL LIMITATIONS:\n"
+                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
+                "- State when information may be jurisdiction-dependent or time-sensitive\n"
+                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
+                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
+                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
+                "TONE AND STYLE:\n"
+                "- Professional and objective\n"
+                "- Clear and accessible while maintaining legal accuracy\n"
+                "- Respectful and neutral\n"
+                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            )
+            
+            optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
+                user_question=user_question,
+                context=conversation_context,
+                file_references=file_references,
+                model=self.model,
+                system_prompt=system_context
+            )
+            
+            # Log token usage and optimization
+            self.logger.info(f"Token usage - Total: {token_usage.total_tokens}, "
+                           f"Context: {token_usage.context_tokens}, "
+                           f"User question: {token_usage.user_question_tokens}, "
+                           f"File refs: {token_usage.file_references_tokens}")
+            
+            if truncation_result.messages_skipped > 0:
+                self.logger.info(f"Context truncated: {truncation_result.messages_skipped} messages skipped, "
+                               f"{truncation_result.tokens_saved} tokens saved")
+            
+            # Send initial metadata
+            yield {
+                "type": "stream_start",
+                "metadata": {
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "model": self.model,
+                    "token_usage": {
+                        'total_tokens': token_usage.total_tokens,
+                        'context_tokens': token_usage.context_tokens,
+                        'user_question_tokens': token_usage.user_question_tokens,
+                        'file_references_tokens': token_usage.file_references_tokens,
+                        'system_prompt_tokens': token_usage.system_prompt_tokens
+                    },
+                    'context_optimization': {
+                        'messages_included': truncation_result.messages_included,
+                        'messages_skipped': truncation_result.messages_skipped,
+                        'tokens_saved': truncation_result.tokens_saved,
+                        'context_truncated': truncation_result.messages_skipped > 0
+                    }
+                }
+            }
+            
+            # Stream response from Anthropic
+            accumulated_content = ""
+            usage_data = {}
+            model_info = None
+            request_id = None
+            
+            for event in self._get_anthropic_response_stream(
+                user_question,
+                self.model,
+                optimized_context,
+                file_references,
+                file_reference_details=file_reference_details
+            ):
+                # Handle different event types
+                if event.get("type") == "error":
+                    yield event
+                    return
+                elif event.get("type") == "stream_end":
+                    break
+                elif event.get("type") == "content_block_delta":
+                    # Accumulate content for final storage
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        accumulated_content += delta.get("text", "")
+                        yield event
+                elif event.get("type") == "message_delta":
+                    # Update usage data
+                    delta = event.get("delta", {})
+                    if "usage" in delta:
+                        usage_data.update(delta["usage"])
+                elif event.get("type") == "message_start":
+                    # Extract model and request info
+                    message = event.get("message", {})
+                    model_info = message.get("model")
+                    request_id = message.get("id")
+                else:
+                    # Pass through other events
+                    yield event
+            
+            # Generate chat name
+            chat_name = self.generate_chat_name(user_question.strip(), self.model)
+            
+            # Create AI chat record (only after streaming is complete)
+            try:
+                ai_chat = AIChat(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    user_question=user_question.strip(),
+                    ai_answer=accumulated_content,
+                    chat_name=chat_name,
+                    ai_model=self.model,
+                    ai_model_provider="Anthropic",
+                    conversation_context=conversation_context,
+                    file_references=json.dumps(file_references) if file_references else None,
+                    file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
+                    context_metadata={
+                        'api_version': '2023-06-01',
+                        'request_timestamp': datetime.now(timezone.utc).isoformat(),
+                        'model_used': self.model,
+                        'file_count': len(file_references) if file_references else 0,
+                        'token_usage': {
+                            'total_tokens': token_usage.total_tokens,
+                            'context_tokens': token_usage.context_tokens,
+                            'user_question_tokens': token_usage.user_question_tokens,
+                            'file_references_tokens': token_usage.file_references_tokens,
+                            'system_prompt_tokens': token_usage.system_prompt_tokens
+                        },
+                        'context_optimization': {
+                            'messages_included': truncation_result.messages_included,
+                            'messages_skipped': truncation_result.messages_skipped,
+                            'tokens_saved': truncation_result.tokens_saved,
+                            'context_truncated': truncation_result.messages_skipped > 0
+                        }
+                    }
+                )
+                
+                db.session.add(ai_chat)
+                db.session.flush()  # Get the ID
+                
+                # Create AI stats record
+                ai_stats = AIStats(
+                    ai_chat_id=ai_chat.id,
+                    tokens_used=usage_data.get('input_tokens', 0) + usage_data.get('output_tokens', 0) if usage_data else None,
+                    prompt_tokens=usage_data.get('input_tokens') if usage_data else None,
+                    completion_tokens=usage_data.get('output_tokens') if usage_data else None,
+                    response_time_ms=None,  # Will be calculated from streaming
+                    api_version='2023-06-01',
+                    request_id=request_id,
+                    error_occurred=False,
+                    error_message=None
+                )
+                
+                db.session.add(ai_stats)
+                
+                # Touch parent chat
+                self._touch_chat(chat_id)
+                
+                db.session.commit()
+                
+                # Send final success event
+                yield {
+                    "type": "stream_complete",
+                    "ai_chat": ai_chat.to_dict(),
+                    "message": "AI chat created successfully"
+                }
+                
+                self.logger.info(f"Streaming AI chat created: {ai_chat.id} for chat {chat_id} by user {user_id}")
+                
+            except Exception as e:
+                db.session.rollback()
+                error_msg = f"Error saving AI chat after streaming: {str(e)}"
+                self.logger.error(error_msg)
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "database_error",
+                        "message": error_msg
+                    }
+                }
+            
+        except Exception as e:
+            error_msg = f"Error in streaming AI chat: {str(e)}"
+            self.logger.error(error_msg)
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "unexpected_error",
+                    "message": error_msg
+                }
+            }
 
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
                       conversation_context: str = None, context_limit: int = 10, 
@@ -851,6 +1197,263 @@ Name:"""
         except Exception as e:
             self.logger.error(f"Error generating fallback name: {str(e)}")
             return "AI Chat"
+
+    def _get_anthropic_response_stream(self, user_question: str, model: str = "claude-sonnet-4-5-20250929",
+                                      conversation_context: str = None, file_references: list = None,
+                                      file_reference_details: Optional[List[Dict]] = None):
+        """
+        Get streaming response from Anthropic Claude API using Server-Sent Events (SSE)
+        
+        Args:
+            user_question: User's question
+            model: Anthropic model to use
+            conversation_context: Previous conversation context
+            file_references: List of Anthropic file IDs to include in the conversation
+            file_reference_details: Detailed file reference information
+            
+        Yields:
+            Dict: SSE event data from Anthropic API
+        """
+        self._ensure_initialized()
+        
+        if not self.api_key:
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "api_key_missing",
+                    "message": "Anthropic API key not configured"
+                }
+            }
+            return
+        
+        try:
+            start_time = time.time()
+            
+            # Prepare the system prompt (same as non-streaming)
+            system_context = (
+                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
+                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
+                "CORE PRINCIPLES:\n"
+                "- Provide precise, legally accurate information based on established legal principles\n"
+                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
+                "- Maintain professional, clear language appropriate for legal contexts\n"
+                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
+                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
+                "RESPONSE FORMAT:\n"
+                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
+                "- Be concise yet comprehensive enough to address the legal query fully\n"
+                "- Structure responses logically: key findings first, followed by supporting details\n"
+                "- Use clear paragraph breaks for readability\n\n"
+                "DOCUMENT ANALYSIS APPROACH:\n"
+                "When analyzing legal documents, identify and explain:\n"
+                "- Main legal purpose and document type\n"
+                "- Key parties, roles, and their obligations\n"
+                "- Critical terms, conditions, and requirements\n"
+                "- Important dates, deadlines, and time-sensitive provisions\n"
+                "- Legal rights, remedies, and liabilities\n"
+                "- Potential legal risks, ambiguities, or areas requiring attention\n"
+                "- Relevant jurisdictional law or governing provisions\n"
+                "- Cross-references to related clauses or external legal requirements\n\n"
+                "GENERAL LEGAL QUESTIONS:\n"
+                "When answering legal questions:\n"
+                "- Provide clear explanations of legal concepts and terminology\n"
+                "- Reference applicable laws, regulations, or legal standards\n"
+                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
+                "- Explain practical implications and typical legal outcomes\n"
+                "- Identify when professional legal counsel should be consulted\n\n"
+                "CRITICAL LIMITATIONS:\n"
+                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
+                "- State when information may be jurisdiction-dependent or time-sensitive\n"
+                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
+                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
+                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
+                "TONE AND STYLE:\n"
+                "- Professional and objective\n"
+                "- Clear and accessible while maintaining legal accuracy\n"
+                "- Respectful and neutral\n"
+                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            )
+
+            # Build the user message content
+            if conversation_context:
+                full_prompt = f"{conversation_context}\n\nHuman: {user_question}\n\nAssistant:"
+            else:
+                full_prompt = f"Human: {user_question}\n\nAssistant:"
+            
+            # Prepare headers with production-grade settings
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": self.anthropic_version,
+                "anthropic-beta": self.anthropic_beta
+            }
+            
+            # Prepare message content (same logic as non-streaming)
+            message_content = []
+
+            # Add file references if provided
+            if file_reference_details and isinstance(file_reference_details, list):
+                for item in file_reference_details:
+                    try:
+                        file_id = item.get('id') or item.get('file_id')
+                        if not file_id:
+                            continue
+                        mime_type = item.get('mime') or item.get('mime_type') or ''
+                        if isinstance(mime_type, str) and mime_type.startswith('image/'):
+                            message_content.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": file_id
+                                }
+                            })
+                        else:
+                            message_content.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": file_id
+                                }
+                            })
+                    except Exception:
+                        fid = item.get('id') or item.get('file_id')
+                        if fid:
+                            message_content.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": fid
+                                }
+                            })
+            elif file_references:
+                for file_id in file_references:
+                    message_content.append({
+                        "type": "document",
+                        "source": {
+                            "type": "file",
+                            "file_id": file_id
+                        }
+                    })
+            
+            # Add text content
+            message_content.append({
+                "type": "text",
+                "text": full_prompt
+            })
+            
+            # Prepare payload with streaming enabled
+            payload = {
+                "model": model,
+                "max_tokens": self.max_tokens,
+                "system": system_context,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": message_content
+                    }
+                ],
+                "stream": True  # Enable streaming
+            }
+            
+            # Make streaming API call
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                stream=True,  # Enable streaming
+                timeout=self.streaming_timeout
+            )
+            
+            if response.status_code != 200:
+                error_msg = f"Anthropic API error: {response.status_code} - {response.text}"
+                self.logger.error(error_msg)
+                yield {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": error_msg,
+                        "status_code": response.status_code
+                    }
+                }
+                return
+            
+            # Parse SSE events with production-grade buffering
+            buffer = ""
+            for chunk in response.iter_content(chunk_size=self.streaming_chunk_size, decode_unicode=True):
+                if chunk:
+                    buffer += chunk
+                    
+                    # Process complete lines
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        
+                        if line.startswith('data: '):
+                            data_content = line[6:]  # Remove 'data: ' prefix
+                            
+                            if data_content == '[DONE]':
+                                yield {
+                                    "type": "stream_end",
+                                    "message": "Stream completed successfully"
+                                }
+                                return
+                            
+                            try:
+                                event_data = json.loads(data_content)
+                                # Add metadata
+                                event_data['_metadata'] = {
+                                    'timestamp': time.time(),
+                                    'elapsed_ms': int((time.time() - start_time) * 1000)
+                                }
+                                yield event_data
+                            except json.JSONDecodeError as e:
+                                self.logger.warning(f"Failed to parse SSE data: {data_content[:100]}... Error: {str(e)}")
+                                continue
+                        elif line.startswith('event: '):
+                            # Handle event type
+                            event_type = line[7:]
+                            continue
+                        elif line == '':
+                            # Empty line, continue
+                            continue
+                        else:
+                            # Other SSE content
+                            continue
+            
+            # Handle any remaining buffer
+            if buffer.strip():
+                self.logger.warning(f"Unprocessed buffer content: {buffer[:100]}...")
+            
+        except requests.exceptions.Timeout:
+            error_msg = "Timeout communicating with Anthropic API during streaming"
+            self.logger.error(error_msg)
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "timeout",
+                    "message": error_msg
+                }
+            }
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"Connection error during streaming: {str(e)}"
+            self.logger.error(error_msg)
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "connection_error",
+                    "message": error_msg
+                }
+            }
+        except Exception as e:
+            error_msg = f"Unexpected error during streaming: {str(e)}"
+            self.logger.error(error_msg)
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "unexpected_error",
+                    "message": error_msg
+                }
+            }
 
     def _get_anthropic_response(self, user_question: str, model: str = "claude-3-haiku-20240307",
                                conversation_context: str = None, file_references: list = None,

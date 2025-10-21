@@ -6,7 +6,10 @@ authentication, validation, and audit logging.
 """
 
 from functools import wraps
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, Response, stream_with_context
+import json
+import time
+import os
 
 from src.services.auth_service import auth_service
 from src.services.anthropic_chat_service import anthropic_chat_service
@@ -216,7 +219,7 @@ def create_ai_chat(chat_id):
         action_type=ActionType.CREATE,
         resource_type="ai_chat",
         resource_id=str(result.ai_chat['id']),
-        new_values=result.ai_chat,
+        new_values=result.ai_chat,  # This is already a serialized dict from service
         ip_address=request.remote_addr,
         user_agent=request.headers.get('User-Agent'),
         metadata={
@@ -453,7 +456,7 @@ def send_message():
         action_type=ActionType.CREATE,
         resource_type="ai_chat",
         resource_id=str(result.ai_chat['id']),
-        new_values=result.ai_chat,
+        new_values=result.ai_chat,  # This is already a serialized dict from service
         ip_address=request.remote_addr,
         user_agent=request.headers.get('User-Agent'),
         metadata={
@@ -479,6 +482,229 @@ def send_message():
         'ai_chat': result.ai_chat,
         'message': 'Message sent successfully'
     }), 201
+
+
+@anthropic_chat_bp.route('/ai-chats/send-message-stream', methods=['POST'])
+@auth_service.require_auth
+@validate_request_data(
+    required_fields=['chat_id', 'user_question'],
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details']
+)
+@handle_errors
+@log_action(ActionType.CREATE, "ai_chat_stream")
+def send_message_stream():
+    """
+    Send a message to Anthropic Claude with streaming response
+    
+    This endpoint provides real-time streaming of AI responses using Server-Sent Events (SSE).
+    The response is streamed to the client as it's generated, providing a better user experience.
+    
+    Returns:
+        Server-Sent Events stream with real-time AI response data
+    """
+    current_user = get_current_user()
+    data = request.validated_data
+    
+    # Validate context_limit if provided
+    context_limit = data.get('context_limit', 10)
+    if context_limit is not None:
+        try:
+            context_limit = int(context_limit)
+            if context_limit < 1 or context_limit > 50:
+                return jsonify({'error': 'context_limit must be between 1 and 50'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'context_limit must be a valid integer'}), 400
+    
+    # Production-grade rate limiting (aligned with Anthropic's capabilities)
+    rate_limit_key = f"ai_chat_stream_rate_limit_{current_user.id}"
+    current_requests = getattr(g, 'cache_service', None)
+    if current_requests:
+        # Use service configuration for rate limiting
+        streaming_rate_limit = anthropic_chat_service.streaming_rate_limit
+        current_count = current_requests.get(rate_limit_key) or 0
+        if current_count >= streaming_rate_limit:
+            return jsonify({
+                'error': 'Streaming rate limit exceeded',
+                'retry_after': 3600,
+                'limit': streaming_rate_limit,
+                'message': f'Maximum {streaming_rate_limit} streaming requests per hour allowed'
+            }), 429
+        
+        # Increment counter
+        current_requests.set(rate_limit_key, current_count + 1, ttl=3600)
+    
+    def generate_stream():
+        """
+        Generator function for streaming response
+        Handles the complete streaming workflow with proper error handling
+        """
+        start_time = time.time()
+        stream_id = f"stream_{int(start_time * 1000)}_{current_user.id}"
+        
+        try:
+            # Log streaming start
+            logging_service.info(
+                "AnthropicChatRoutes",
+                "SEND_MESSAGE_STREAM_START",
+                f"Streaming started for chat {data['chat_id']} by user {current_user.id}",
+                user_id=current_user.id,
+                metadata={
+                    'stream_id': stream_id,
+                    'chat_id': data['chat_id'],
+                    'user_question_length': len(data['user_question']),
+                    'file_references_count': len(data.get('file_references', [])),
+                    'context_limit': context_limit
+                }
+            )
+            
+            # Send initial connection confirmation
+            yield f"data: {json.dumps({'type': 'connection_established', 'stream_id': stream_id})}\n\n"
+            
+            # Stream AI chat creation
+            for event in anthropic_chat_service.create_ai_chat_stream(
+                chat_id=data['chat_id'],
+                user_id=current_user.id,
+                user_question=data['user_question'],
+                conversation_context=data.get('conversation_context'),
+                context_limit=context_limit,
+                file_references=data.get('file_references'),
+                file_reference_details=data.get('file_reference_details')
+            ):
+                # Add stream metadata to each event
+                event['stream_id'] = stream_id
+                event['timestamp'] = time.time()
+                
+                # Handle different event types
+                if event.get('type') == 'error':
+                    # Log error
+                    logging_service.error(
+                        "AnthropicChatRoutes",
+                        "SEND_MESSAGE_STREAM_ERROR",
+                        f"Streaming error for chat {data['chat_id']}: {event.get('error', {}).get('message', 'Unknown error')}",
+                        user_id=current_user.id,
+                        metadata={
+                            'stream_id': stream_id,
+                            'chat_id': data['chat_id'],
+                            'error_type': event.get('error', {}).get('type', 'unknown'),
+                            'error_message': event.get('error', {}).get('message', 'Unknown error')
+                        }
+                    )
+                    
+                    # Send error event
+                    yield f"data: {json.dumps(event)}\n\n"
+                    break
+                
+                elif event.get('type') == 'stream_start':
+                    # Log stream start
+                    logging_service.info(
+                        "AnthropicChatRoutes",
+                        "SEND_MESSAGE_STREAM_PROCESSING",
+                        f"Stream processing started for chat {data['chat_id']}",
+                        user_id=current_user.id,
+                        metadata={
+                            'stream_id': stream_id,
+                            'chat_id': data['chat_id'],
+                            'model': event.get('metadata', {}).get('model', 'unknown')
+                        }
+                    )
+                    
+                    # Send stream start event
+                    yield f"data: {json.dumps(event)}\n\n"
+                
+                elif event.get('type') == 'content_block_delta':
+                    # Stream content deltas in real-time
+                    yield f"data: {json.dumps(event)}\n\n"
+                
+                elif event.get('type') == 'stream_complete':
+                    # Log successful completion
+                    processing_time = time.time() - start_time
+                    ai_chat_id = event.get('ai_chat', {}).get('id')
+                    
+                    logging_service.info(
+                        "AnthropicChatRoutes",
+                        "SEND_MESSAGE_STREAM_COMPLETE",
+                        f"Streaming completed for chat {data['chat_id']} in {processing_time:.2f}s",
+                        user_id=current_user.id,
+                        metadata={
+                            'stream_id': stream_id,
+                            'chat_id': data['chat_id'],
+                            'ai_chat_id': ai_chat_id,
+                            'processing_time': processing_time,
+                            'success': True
+                        }
+                    )
+                    
+                    # Add processing time to final event
+                    event['processing_time'] = processing_time
+                    yield f"data: {json.dumps(event)}\n\n"
+                    break
+                
+                else:
+                    # Pass through other events
+                    yield f"data: {json.dumps(event)}\n\n"
+            
+            # Send final stream end marker
+            yield f"data: {json.dumps({'type': 'stream_end', 'stream_id': stream_id})}\n\n"
+            
+        except Exception as e:
+            # Log unexpected error
+            processing_time = time.time() - start_time
+            error_msg = f"Unexpected error in streaming: {str(e)}"
+            
+            logging_service.error(
+                "AnthropicChatRoutes",
+                "SEND_MESSAGE_STREAM_UNEXPECTED_ERROR",
+                error_msg,
+                user_id=current_user.id,
+                metadata={
+                    'stream_id': stream_id,
+                    'chat_id': data['chat_id'],
+                    'processing_time': processing_time,
+                    'error': str(e)
+                }
+            )
+            
+            # Send error event
+            yield f"data: {json.dumps({'type': 'error', 'error': {'type': 'unexpected_error', 'message': error_msg}, 'stream_id': stream_id})}\n\n"
+        
+        finally:
+            # Log stream completion (success or failure)
+            total_time = time.time() - start_time
+            logging_service.info(
+                "AnthropicChatRoutes",
+                "SEND_MESSAGE_STREAM_FINAL",
+                f"Stream session ended for chat {data['chat_id']} (total time: {total_time:.2f}s)",
+                user_id=current_user.id,
+                metadata={
+                    'stream_id': stream_id,
+                    'chat_id': data['chat_id'],
+                    'total_time': total_time
+                }
+            )
+    
+    # Production-grade streaming headers (optimized for millions of users)
+    headers = {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',  # Disable nginx buffering
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control, Authorization, Content-Type, X-Requested-With',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Max-Age': '86400',  # 24 hours
+        'Keep-Alive': 'timeout=300, max=1000'  # 5 minutes timeout, 1000 requests
+    }
+    
+    # Note: Compression disabled for streaming to avoid ERR_CONTENT_DECODING_FAILED
+    # Server-Sent Events work better without compression for real-time streaming
+    # Compression can be enabled for non-streaming endpoints
+    
+    return Response(
+        stream_with_context(generate_stream()),
+        mimetype='text/event-stream',
+        headers=headers
+    )
 
 
 # Health check
