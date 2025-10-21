@@ -241,7 +241,11 @@ class AnthropicChatService:
             
             # Get AI response from Anthropic Claude
             anthropic_response = self._get_anthropic_response(
-                user_question, self.model, optimized_context, file_references
+                user_question,
+                self.model,
+                optimized_context,
+                file_references,
+                file_reference_details=file_reference_details
             )
             
             if not anthropic_response.success:
@@ -849,7 +853,8 @@ Name:"""
             return "AI Chat"
 
     def _get_anthropic_response(self, user_question: str, model: str = "claude-3-haiku-20240307",
-                               conversation_context: str = None, file_references: list = None) -> AnthropicResponse:
+                               conversation_context: str = None, file_references: list = None,
+                               file_reference_details: Optional[List[Dict]] = None) -> AnthropicResponse:
         """
         Get response from Anthropic Claude API
         
@@ -940,9 +945,47 @@ Name:"""
             
             # Prepare message content
             message_content = []
-            
+
             # Add file references if provided
-            if file_references:
+            # If we have rich details, use mime_type to choose between document vs image blocks
+            if file_reference_details and isinstance(file_reference_details, list):
+                for item in file_reference_details:
+                    try:
+                        file_id = item.get('id') or item.get('file_id')
+                        if not file_id:
+                            continue
+                        mime_type = item.get('mime') or item.get('mime_type') or ''
+                        if isinstance(mime_type, str) and mime_type.startswith('image/'):
+                            # Send as image block per Claude Files API docs
+                            message_content.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": file_id
+                                }
+                            })
+                        else:
+                            # Default to document block for PDFs/plain text
+                            message_content.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": file_id
+                                }
+                            })
+                    except Exception:
+                        # Fallback to document block if anything goes wrong
+                        fid = item.get('id') or item.get('file_id')
+                        if fid:
+                            message_content.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": fid
+                                }
+                            })
+            elif file_references:
+                # Backward-compatible behavior: assume document blocks for all
                 for file_id in file_references:
                     message_content.append({
                         "type": "document",
