@@ -13,9 +13,10 @@ from .template_documento import TemplateDeDocumento
 from .user import User
 from .project import Project
 from .chat import Chat
+from .ai_chat import AIChat, AIStats
 
 __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
-    'LegalSource', 'ScrapedContent', 'Project', 'Chat'
+    'LegalSource', 'ScrapedContent', 'Project', 'Chat', 'AIChat', 'AIStats'
 ]

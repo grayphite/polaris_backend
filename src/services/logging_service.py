@@ -20,6 +20,20 @@ from src.extensions import db
 from src.models import AuditLog
 
 
+def json_serializer(obj):
+    """
+    Custom JSON serializer that handles datetime objects and other non-serializable types
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, timedelta):
+        return str(obj)
+    elif hasattr(obj, '__dict__'):
+        return obj.__dict__
+    else:
+        return str(obj)
+
+
 class LogLevel(Enum):
     """Níveis de log"""
     DEBUG = "DEBUG"
@@ -254,20 +268,35 @@ class LoggingService:
                 metadata=metadata
             )
 
+            # Serialize all JSON fields to handle datetime objects and other non-JSON types
+            def safe_serialize(data):
+                """Safely serialize data for JSON storage"""
+                if not data:
+                    return {}
+                try:
+                    return json.loads(json.dumps(data, default=json_serializer))
+                except (TypeError, ValueError):
+                    # Fallback: convert all values to strings if serialization fails
+                    return {k: str(v) for k, v in data.items()}
+            
+            serialized_metadata = safe_serialize(metadata)
+            serialized_old_values = safe_serialize(old_values)
+            serialized_new_values = safe_serialize(new_values)
+            
             # Salvar no banco de dados
             audit_log = AuditLog(
                 user_id=user_id,
                 action_type=action_type.value,
                 resource_type=resource_type,
                 resource_id=resource_id,
-                old_values=old_values or {},
-                new_values=new_values or {},
+                old_values=serialized_old_values,
+                new_values=serialized_new_values,
                 ip_address=ip_address,
                 user_agent=user_agent,
                 session_id=session_id,
                 success=success,
                 error_message=error_message,
-                audit_metadata=metadata or {}
+                audit_metadata=serialized_metadata
             )
 
             db.session.add(audit_log)

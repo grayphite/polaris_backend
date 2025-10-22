@@ -17,7 +17,7 @@ class Chat(db.Model):
     description = db.Column(db.Text, nullable=True)
     
     # Parent relationship
-    project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False, index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
@@ -34,6 +34,7 @@ class Chat(db.Model):
     
     # Relationships
     project = db.relationship('Project', back_populates='chats')
+    ai_conversations = db.relationship('AIChat', back_populates='chat', cascade='all, delete-orphan')
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_chats')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_chats')
     
@@ -63,8 +64,10 @@ class Chat(db.Model):
             'description': self.description,
             'project_id': self.project_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'created_by': self.created_by,
-            'is_deleted': self.is_deleted
+            'is_deleted': self.is_deleted,
+            'aichat_count': len([ai_chat for ai_chat in self.ai_conversations if not ai_chat.is_deleted])
         }
 
 
