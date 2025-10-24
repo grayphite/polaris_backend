@@ -55,7 +55,7 @@ class AnthropicChatService:
         self.model = "claude-sonnet-4-5-20250929"
         self.max_tokens = 2000
         self._initialized = False
-        
+
         # Streaming configuration (aligned with Anthropic production model)
         # Based on Anthropic's actual production capabilities for millions of users
         self.streaming_timeout = int(os.getenv('ANTHROPIC_STREAMING_TIMEOUT', '300'))  # 5 minutes (Anthropic's max)
@@ -127,7 +127,8 @@ class AnthropicChatService:
 
     def create_ai_chat_stream(self, chat_id: int, user_id: int, user_question: str,
                              conversation_context: str = None, context_limit: int = 10, 
-                             file_references: list = None, file_reference_details: list = None):
+                             file_references: list = None, file_reference_details: list = None,
+                             use_rag: bool = False):
         """
         Create a streaming AI chat conversation
         
@@ -139,6 +140,7 @@ class AnthropicChatService:
             context_limit: Number of recent conversations to include in context (default: 10)
             file_references: List of Anthropic file IDs to include in the conversation
             file_reference_details: Detailed file reference information
+            use_rag: Whether to use RAG for context enhancement (default: False)
             
         Yields:
             Dict: Streaming response data with metadata
@@ -230,49 +232,57 @@ class AnthropicChatService:
                     context_limit=context_limit
                 )
             
-            # Optimize context using tokenizer service
-            system_context = (
-                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
-                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
-                "CORE PRINCIPLES:\n"
-                "- Provide precise, legally accurate information based on established legal principles\n"
-                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
-                "- Maintain professional, clear language appropriate for legal contexts\n"
-                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
-                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
-                "RESPONSE FORMAT:\n"
-                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
-                "- Be concise yet comprehensive enough to address the legal query fully\n"
-                "- Structure responses logically: key findings first, followed by supporting details\n"
-                "- Use clear paragraph breaks for readability\n\n"
-                "DOCUMENT ANALYSIS APPROACH:\n"
-                "When analyzing legal documents, identify and explain:\n"
-                "- Main legal purpose and document type\n"
-                "- Key parties, roles, and their obligations\n"
-                "- Critical terms, conditions, and requirements\n"
-                "- Important dates, deadlines, and time-sensitive provisions\n"
-                "- Legal rights, remedies, and liabilities\n"
-                "- Potential legal risks, ambiguities, or areas requiring attention\n"
-                "- Relevant jurisdictional law or governing provisions\n"
-                "- Cross-references to related clauses or external legal requirements\n\n"
-                "GENERAL LEGAL QUESTIONS:\n"
-                "When answering legal questions:\n"
-                "- Provide clear explanations of legal concepts and terminology\n"
-                "- Reference applicable laws, regulations, or legal standards\n"
-                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
-                "- Explain practical implications and typical legal outcomes\n"
-                "- Identify when professional legal counsel should be consulted\n\n"
-                "CRITICAL LIMITATIONS:\n"
-                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
-                "- State when information may be jurisdiction-dependent or time-sensitive\n"
-                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
-                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
-                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
-                "TONE AND STYLE:\n"
-                "- Professional and objective\n"
-                "- Clear and accessible while maintaining legal accuracy\n"
-                "- Respectful and neutral\n"
-                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            # RAG Enhancement (if enabled)
+            rag_metadata = {}
+            if use_rag:
+                try:
+                    # Use system defaults for RAG parameters
+                    rag_result = self._try_rag_enhancement(
+                        user_question=user_question,
+                        similarity_threshold=None,  # Use system default
+                        max_chunks=None,  # Use system default
+                        rag_sources=None
+                    )
+                    if rag_result['success']:
+                        # Enhance conversation context with RAG
+                        conversation_context = self._enhance_context_with_rag(
+                            conversation_context, 
+                            rag_result
+                        )
+                        rag_metadata = rag_result.get('metadata', {})
+                    else:
+                        rag_metadata = {
+                            'rag_enabled': False,
+                            'fallback_reason': rag_result.get('error', 'RAG failed'),
+                            'processing_mode': 'fallback'
+                        }
+                except Exception as e:
+                    self.logger.warning(f"RAG enhancement failed: {str(e)}")
+                    rag_metadata = {
+                        'rag_enabled': False,
+                        'fallback_reason': f'RAG error: {str(e)}',
+                        'processing_mode': 'error'
+                    }
+            else:
+                rag_metadata = {
+                    'rag_enabled': False,
+                    'fallback_reason': 'RAG not requested',
+                    'processing_mode': 'normal'
+                }
+            
+            # Get system prompt from prompts module
+            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt_with_rag_metadata
+            
+            # Prepare RAG sources for prompt enhancement
+            rag_sources = []
+            if rag_metadata and rag_metadata.get('rag_enabled'):
+                context_chunks = rag_metadata.get('context_chunks', [])
+                rag_sources = context_chunks
+            
+            # Get enhanced system prompt
+            system_context = get_anthropic_chat_system_prompt_with_rag_metadata(
+                conversation_context=conversation_context,
+                rag_metadata=rag_metadata
             )
             
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
@@ -312,7 +322,8 @@ class AnthropicChatService:
                         'messages_skipped': truncation_result.messages_skipped,
                         'tokens_saved': truncation_result.tokens_saved,
                         'context_truncated': truncation_result.messages_skipped > 0
-                    }
+                    },
+                    'rag_metadata': rag_metadata
                 }
             }
             
@@ -419,7 +430,8 @@ class AnthropicChatService:
                 yield {
                     "type": "stream_complete",
                     "ai_chat": ai_chat.to_dict(),
-                    "message": "AI chat created successfully"
+                    "message": "AI chat created successfully",
+                    "rag_metadata": rag_metadata
                 }
                 
                 self.logger.info(f"Streaming AI chat created: {ai_chat.id} for chat {chat_id} by user {user_id}")
@@ -523,49 +535,12 @@ class AnthropicChatService:
                     context_limit=context_limit
                 )
             
-            # Optimize context using tokenizer service (pass the same system prompt we'll use)
-            system_context = (
-                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
-                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
-                "CORE PRINCIPLES:\n"
-                "- Provide precise, legally accurate information based on established legal principles\n"
-                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
-                "- Maintain professional, clear language appropriate for legal contexts\n"
-                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
-                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
-                "RESPONSE FORMAT:\n"
-                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
-                "- Be concise yet comprehensive enough to address the legal query fully\n"
-                "- Structure responses logically: key findings first, followed by supporting details\n"
-                "- Use clear paragraph breaks for readability\n\n"
-                "DOCUMENT ANALYSIS APPROACH:\n"
-                "When analyzing legal documents, identify and explain:\n"
-                "- Main legal purpose and document type\n"
-                "- Key parties, roles, and their obligations\n"
-                "- Critical terms, conditions, and requirements\n"
-                "- Important dates, deadlines, and time-sensitive provisions\n"
-                "- Legal rights, remedies, and liabilities\n"
-                "- Potential legal risks, ambiguities, or areas requiring attention\n"
-                "- Relevant jurisdictional law or governing provisions\n"
-                "- Cross-references to related clauses or external legal requirements\n\n"
-                "GENERAL LEGAL QUESTIONS:\n"
-                "When answering legal questions:\n"
-                "- Provide clear explanations of legal concepts and terminology\n"
-                "- Reference applicable laws, regulations, or legal standards\n"
-                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
-                "- Explain practical implications and typical legal outcomes\n"
-                "- Identify when professional legal counsel should be consulted\n\n"
-                "CRITICAL LIMITATIONS:\n"
-                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
-                "- State when information may be jurisdiction-dependent or time-sensitive\n"
-                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
-                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
-                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
-                "TONE AND STYLE:\n"
-                "- Professional and objective\n"
-                "- Clear and accessible while maintaining legal accuracy\n"
-                "- Respectful and neutral\n"
-                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            # Get system prompt from prompts module
+            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            
+            # Get system prompt (no RAG support in this method)
+            system_context = get_anthropic_chat_system_prompt(
+                conversation_context=conversation_context
             )
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
@@ -1229,49 +1204,12 @@ Name:"""
         try:
             start_time = time.time()
             
-            # Prepare the system prompt (same as non-streaming)
-            system_context = (
-                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
-                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
-                "CORE PRINCIPLES:\n"
-                "- Provide precise, legally accurate information based on established legal principles\n"
-                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
-                "- Maintain professional, clear language appropriate for legal contexts\n"
-                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
-                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
-                "RESPONSE FORMAT:\n"
-                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
-                "- Be concise yet comprehensive enough to address the legal query fully\n"
-                "- Structure responses logically: key findings first, followed by supporting details\n"
-                "- Use clear paragraph breaks for readability\n\n"
-                "DOCUMENT ANALYSIS APPROACH:\n"
-                "When analyzing legal documents, identify and explain:\n"
-                "- Main legal purpose and document type\n"
-                "- Key parties, roles, and their obligations\n"
-                "- Critical terms, conditions, and requirements\n"
-                "- Important dates, deadlines, and time-sensitive provisions\n"
-                "- Legal rights, remedies, and liabilities\n"
-                "- Potential legal risks, ambiguities, or areas requiring attention\n"
-                "- Relevant jurisdictional law or governing provisions\n"
-                "- Cross-references to related clauses or external legal requirements\n\n"
-                "GENERAL LEGAL QUESTIONS:\n"
-                "When answering legal questions:\n"
-                "- Provide clear explanations of legal concepts and terminology\n"
-                "- Reference applicable laws, regulations, or legal standards\n"
-                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
-                "- Explain practical implications and typical legal outcomes\n"
-                "- Identify when professional legal counsel should be consulted\n\n"
-                "CRITICAL LIMITATIONS:\n"
-                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
-                "- State when information may be jurisdiction-dependent or time-sensitive\n"
-                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
-                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
-                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
-                "TONE AND STYLE:\n"
-                "- Professional and objective\n"
-                "- Clear and accessible while maintaining legal accuracy\n"
-                "- Respectful and neutral\n"
-                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            # Get system prompt from prompts module
+            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            
+            # Get system prompt
+            system_context = get_anthropic_chat_system_prompt(
+                conversation_context=conversation_context
             )
 
             # Build the user message content
@@ -1481,55 +1419,12 @@ Name:"""
         try:
             start_time = time.time()
             
-            # Prepare the system prompt (sent via Claude "system" field)
-            system_context = (
-                "You are a specialized legal AI assistant designed to analyze legal documents and provide accurate "
-                "legal information. Your purpose is to assist legal professionals and individuals seeking legal understanding.\n\n"
-
-                "CORE PRINCIPLES:\n"
-                "- Provide precise, legally accurate information based on established legal principles\n"
-                "- Focus on objective legal analysis without offering specific legal advice or attorney-client relationships\n"
-                "- Maintain professional, clear language appropriate for legal contexts\n"
-                "- Cite relevant statutes, regulations, case law, or legal precedents when applicable\n"
-                "- Acknowledge jurisdictional variations and limitations in your knowledge\n\n"
-
-                "RESPONSE FORMAT:\n"
-                "- Use plain text only (no markdown, bullet points, or special formatting)\n"
-                "- Be concise yet comprehensive enough to address the legal query fully\n"
-                "- Structure responses logically: key findings first, followed by supporting details\n"
-                "- Use clear paragraph breaks for readability\n\n"
-
-                "DOCUMENT ANALYSIS APPROACH:\n"
-                "When analyzing legal documents, identify and explain:\n"
-                "- Main legal purpose and document type\n"
-                "- Key parties, roles, and their obligations\n"
-                "- Critical terms, conditions, and requirements\n"
-                "- Important dates, deadlines, and time-sensitive provisions\n"
-                "- Legal rights, remedies, and liabilities\n"
-                "- Potential legal risks, ambiguities, or areas requiring attention\n"
-                "- Relevant jurisdictional law or governing provisions\n"
-                "- Cross-references to related clauses or external legal requirements\n\n"
-
-                "GENERAL LEGAL QUESTIONS:\n"
-                "When answering legal questions:\n"
-                "- Provide clear explanations of legal concepts and terminology\n"
-                "- Reference applicable laws, regulations, or legal standards\n"
-                "- Distinguish between general legal principles and jurisdiction-specific rules\n"
-                "- Explain practical implications and typical legal outcomes\n"
-                "- Identify when professional legal counsel should be consulted\n\n"
-
-                "CRITICAL LIMITATIONS:\n"
-                "- Always clarify that you do not provide legal advice or replace qualified legal counsel\n"
-                "- State when information may be jurisdiction-dependent or time-sensitive\n"
-                "- Acknowledge gaps in your knowledge or when updated legal research is needed\n"
-                "- Never guarantee legal outcomes or suggest specific legal strategies for individual cases\n"
-                "- Recommend consulting a licensed attorney for specific legal situations\n\n"
-
-                "TONE AND STYLE:\n"
-                "- Professional and objective\n"
-                "- Clear and accessible while maintaining legal accuracy\n"
-                "- Respectful and neutral\n"
-                "- Direct and practical, avoiding unnecessary legal jargon unless required for precision"
+            # Get system prompt from prompts module
+            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            
+            # Get system prompt
+            system_context = get_anthropic_chat_system_prompt(
+                conversation_context=conversation_context
             )
 
             # Build the user message content (no system text embedded)
@@ -1698,6 +1593,136 @@ Name:"""
                 'timestamp': datetime.now(timezone.utc).isoformat(),
                 'error': str(e)
             }
+
+    def _try_rag_enhancement(self, user_question: str, similarity_threshold: float = None, 
+                           max_chunks: int = None, rag_sources: list = None) -> Dict[str, Any]:
+        """
+        Try to enhance context using RAG
+        
+        Args:
+            user_question: User's question
+            similarity_threshold: RAG similarity threshold
+            max_chunks: Maximum RAG chunks
+            rag_sources: Optional specific sources
+            
+        Returns:
+            Dict with RAG result and metadata
+        """
+        try:
+            # Import RAG components safely
+            from src.services.rag_claude_middleware import get_rag_claude_middleware
+            
+            middleware = get_rag_claude_middleware()
+            if not middleware.rag_enabled:
+                return {
+                    'success': False,
+                    'error': 'RAG not available',
+                    'metadata': {
+                        'rag_enabled': False,
+                        'fallback_reason': 'RAG middleware not available'
+                    }
+                }
+            
+            # Use system defaults if parameters not provided
+            if similarity_threshold is None:
+                # Load from RAG config
+                try:
+                    from rag.config.rag_config import get_rag_config_values
+                    config = get_rag_config_values()
+                    similarity_threshold = config.search.default_score_threshold
+                except:
+                    similarity_threshold = 0.01  # Fallback default
+            
+            if max_chunks is None:
+                # Load from RAG config
+                try:
+                    from rag.config.rag_config import get_rag_config_values
+                    config = get_rag_config_values()
+                    max_chunks = config.search.default_max_docs
+                except:
+                    max_chunks = 5  # Fallback default
+            
+            # Try RAG query
+            rag_result = middleware.rag_integration.juridical_query(
+                query=user_question,
+                max_chunks=max_chunks,
+                similarity_threshold=similarity_threshold
+            )
+            
+            if rag_result.get('success', False):
+                return {
+                    'success': True,
+                    'context_chunks': rag_result.get('context_chunks', []),
+                    'sources': rag_result.get('sources', []),
+                    'metadata': {
+                        'rag_enabled': True,
+                        'processing_mode': 'rag_enhanced',
+                        'docs_found': len(rag_result.get('context_chunks', [])),
+                        'sources': rag_result.get('sources', []),
+                        'max_relevance_score': max([chunk.get('score', 0) for chunk in rag_result.get('context_chunks', [])], default=0)
+                    }
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': rag_result.get('error', 'RAG query failed'),
+                    'metadata': {
+                        'rag_enabled': False,
+                        'fallback_reason': rag_result.get('error', 'RAG query failed')
+                    }
+                }
+                
+        except Exception as e:
+            self.logger.warning(f"RAG enhancement error: {str(e)}")
+            return {
+                'success': False,
+                'error': f'RAG error: {str(e)}',
+                'metadata': {
+                    'rag_enabled': False,
+                    'fallback_reason': f'RAG error: {str(e)}'
+                }
+            }
+    
+    def _enhance_context_with_rag(self, conversation_context: str, rag_result: Dict[str, Any]) -> str:
+        """
+        Enhance conversation context with RAG results
+        
+        Args:
+            conversation_context: Original conversation context
+            rag_result: RAG enhancement result
+            
+        Returns:
+            Enhanced conversation context
+        """
+        try:
+            context_chunks = rag_result.get('context_chunks', [])
+            sources = rag_result.get('sources', [])
+            
+            if not context_chunks:
+                return conversation_context
+            
+            # Build RAG context section
+            rag_context = "\n\n=== RAG ENHANCED CONTEXT ===\n"
+            rag_context += "Relevant legal documents found:\n"
+            
+            for i, chunk in enumerate(context_chunks, 1):
+                source = chunk.get('source', 'Unknown')
+                score = chunk.get('score', 0)
+                text = chunk.get('text', '')[:500]  # Limit text length
+                
+                rag_context += f"\n{i}. Source: {source} (Relevance: {score:.3f})\n"
+                rag_context += f"Content: {text}...\n"
+            
+            rag_context += f"\nSources: {', '.join(sources)}\n"
+            rag_context += "=== END RAG CONTEXT ===\n"
+            
+            # Combine with existing context
+            enhanced_context = conversation_context + rag_context
+            return enhanced_context
+            
+        except Exception as e:
+            self.logger.warning(f"Error enhancing context with RAG: {str(e)}")
+            return conversation_context
 
 
 # Global instance

@@ -1,0 +1,70 @@
+{
+  "_comments": {
+    "info": "RAG Configuration File - Edit directly or use: python rag/rag_config_manager.py --show",
+    "search": {
+      "default_score_threshold": "Main search threshold (0.01=more results, 0.1=fewer but better)",
+      "min_score_threshold": "Minimum allowed threshold (prevents too low values)",
+      "max_score_threshold": "Maximum allowed threshold (prevents too high values)",
+      "default_max_results": "Maximum number of search results to return",
+      "default_max_docs": "Maximum documents to include in context for Claude",
+      "default_max_context_length": "Maximum characters in enhanced prompt sent to Claude"
+    },
+    "document": {
+      "default_chunk_size": "Size of text chunks (200=small, 2000=large)",
+      "default_chunk_overlap": "Overlap between chunks for better context",
+      "max_file_size_mb": "Maximum file size in MB before processing",
+      "supported_extensions": "File types that can be processed by RAG",
+      "max_documents_per_batch": "Maximum documents to process in one batch"
+    },
+    "database": {
+      "default_db_path": "Path where ChromaDB stores vector data",
+      "default_collection_name": "Name of the document collection in ChromaDB",
+      "default_embedding_model": "AI model for converting text to vectors (multilingual support)",
+      "fallback_embedding_model": "Backup embedding model if main model fails"
+    },
+    "api": {
+      "default_rate_limit": "Maximum API requests per hour per user",
+      "max_prompt_length": "Maximum characters in user prompts",
+      "default_timeout": "Request timeout in seconds"
+    },
+    "environment": {
+      "environment": "Current environment (development/staging/production)",
+      "debug_mode": "Enable debug logging (true/false)",
+      "log_level": "Logging level (DEBUG/INFO/WARNING/ERROR)"
+    }
+  },
+  "search": {
+    "default_score_threshold": 0.05,
+    "min_score_threshold": 0.01,
+    "max_score_threshold": 0.5,
+    "default_max_results": 5,
+    "default_max_docs": 3,
+    "default_max_context_length": 4000
+  },
+  "document": {
+    "default_chunk_size": 1000,
+    "default_chunk_overlap": 200,
+    "max_file_size_mb": 50,
+    "supported_extensions": [
+      ".pdf",
+      ".docx",
+      ".doc",
+      ".txt"
+    ],
+    "max_documents_per_batch": 10
+  },
+  "database": {
+    "default_db_path": "./chroma_db",
+    "default_collection_name": "juridical_documents",
+    "default_embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "fallback_embedding_model": "all-MiniLM-L6-v2"
+  },
+  "api": {
+    "default_rate_limit": 100,
+    "max_prompt_length": 15000,
+    "default_timeout": 30
+  },
+  "environment": "development",
+  "debug_mode": false,
+  "log_level": "INFO"
+}

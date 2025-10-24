@@ -56,7 +56,7 @@ class ClaudeAIService:
             self.logger.warning("ANTHROPIC_API_KEY não configurada - modo simulação")
 
     def chat(self, prompt: str, user_id: int = None,
-             context: List[str] = None) -> AIResponse:
+             context: List[str] = None, rag_sources: List[Dict] = None) -> AIResponse:
         """
         Chat básico com Claude AI
         
@@ -64,6 +64,7 @@ class ClaudeAIService:
             prompt: Pergunta/prompt do usuário
             user_id: ID do usuário (para logging)
             context: Contexto adicional para enriquecer a resposta
+            rag_sources: Fontes RAG para atribuição
             
         Returns:
             AIResponse com a resposta da IA
@@ -80,7 +81,7 @@ class ClaudeAIService:
                 )
 
             # Construir prompt com contexto se fornecido
-            enhanced_prompt = self._build_enhanced_prompt(prompt, context)
+            enhanced_prompt = self._build_enhanced_prompt(prompt, context, rag_sources)
 
             # Preparar headers
             headers = {
@@ -311,7 +312,7 @@ class ClaudeAIService:
 
     # Métodos privados auxiliares
 
-    def _build_enhanced_prompt(self, prompt: str, context: List[str] = None) -> str:
+    def _build_enhanced_prompt(self, prompt: str, context: List[str] = None, rag_sources: List[Dict] = None) -> str:
         """Construir prompt enriquecido com contexto"""
         if not context:
             return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
@@ -325,17 +326,32 @@ Responda de forma profissional e técnica, considerando:
 Pergunta: {prompt}"""
 
         context_text = "\n".join([f"- {ctx}" for ctx in context])
+        
+        # Build source attribution if RAG sources are provided
+        source_attribution = ""
+        if rag_sources:
+            source_attribution = "\n\nIMPORTANTE: Ao responder, sempre mencione as fontes das informações quando usar o contexto acima. Inclua:\n"
+            source_attribution += "- Nome do documento/fonte\n"
+            source_attribution += "- País/jurisdição quando aplicável\n"
+            source_attribution += "- Seção ou capítulo relevante\n"
+            source_attribution += "- Exemplo: 'Conforme a Lei X do país Y, artigo Z...'\n"
+            source_attribution += "- Seja específico sobre a origem da informação\n\n"
 
         return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
 
-CONTEXTO RELEVANTE:
+CONTEXTO RELEVANTE ENCONTRADO:
 {context_text}
-
-Baseando-se no contexto acima e em seu conhecimento, responda de forma profissional e técnica, considerando:
+{source_attribution}Baseando-se no contexto acima e em seu conhecimento, responda de forma profissional e técnica, considerando:
 - Estruturas offshore (trusts, holdings, etc.)
 - Implicações fiscais no Brasil e internacionalmente
 - Compliance e regulamentações
 - Melhores práticas do setor
+
+INSTRUÇÕES IMPORTANTES:
+- Se você usar informações do contexto acima, SEMPRE mencione a fonte específica
+- Indique o país/jurisdição quando aplicável
+- Seja transparente sobre de onde vem cada informação
+- Combine informações do contexto com seu conhecimento geral quando apropriado
 
 Pergunta: {prompt}"""
 

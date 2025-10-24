@@ -119,7 +119,8 @@ def smart_chat_route():
     current_user = None
     user_id = None
     if AUTH_AVAILABLE:
-        current_user = auth_service.get_current_user()
+        from flask import g
+        current_user = getattr(g, 'current_user', None)
         user_id = current_user.id if current_user else None
 
     data = request.validated_data
@@ -198,7 +199,7 @@ def rag_chat_route():
     {
         "prompt": "Pergunta jurídica para RAG",
         "max_chunks": 5 (opcional),
-        "similarity_threshold": 0.6 (opcional)
+        "similarity_threshold": 0.05 (opcional)
     }
     """
     start_time = time.time()
@@ -207,13 +208,14 @@ def rag_chat_route():
     current_user = None
     user_id = None
     if AUTH_AVAILABLE:
-        current_user = auth_service.get_current_user()
+        from flask import g
+        current_user = getattr(g, 'current_user', None)
         user_id = current_user.id if current_user else None
 
     data = request.validated_data
     prompt = data['prompt']
     max_chunks = data.get('max_chunks', 5)
-    similarity_threshold = data.get('similarity_threshold', 0.6)
+    similarity_threshold = data.get('similarity_threshold', 0.05)
 
     # Verificar se RAG está disponível
     middleware = get_rag_claude_middleware()

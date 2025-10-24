@@ -59,6 +59,11 @@ def create_app():
     # app.register_blueprint(openai_chat_bp, url_prefix='/api')  # Commented out - using Anthropic instead
     app.register_blueprint(anthropic_chat_bp, url_prefix='/api')
     app.register_blueprint(file_upload_bp, url_prefix='/api')
+    
+    # Register RAG-enhanced AI routes
+    from src.routes.enhanced_ai_routes import register_enhanced_ai_routes
+    register_enhanced_ai_routes(app)
+    
     # Skipping for now as not being used
     # app.register_blueprint(cliente_bp, url_prefix='/api')
     # app.register_blueprint(ai_bp, url_prefix='/api')

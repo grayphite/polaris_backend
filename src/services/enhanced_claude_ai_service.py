@@ -90,7 +90,7 @@ class EnhancedClaudeAIService:
         # Configurações
         self.enable_rag_by_default = True
         self.cache_ttl_minutes = 30
-        self.rag_similarity_threshold = 0.6
+        self.rag_similarity_threshold = 0.05
         self.max_rag_chunks = 5
 
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -148,7 +148,7 @@ class EnhancedClaudeAIService:
             prompt: Pergunta do usuário
             user_id: ID do usuário
             max_chunks: Máximo de chunks RAG (default: 5)
-            similarity_threshold: Limite de similaridade (default: 0.6)
+            similarity_threshold: Limite de similaridade (default: 0.05)
             
         Returns:
             EnhancedAIResponse com contexto RAG

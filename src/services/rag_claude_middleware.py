@@ -76,7 +76,12 @@ class RAGClaudeMiddleware:
         # RAG integration (opcional)
         if RAG_AVAILABLE:
             try:
-                self.rag_integration = MCPRAGIntegration()
+                # Initialize RAG manager first
+                from rag.rag_manager import JuridicalRAGManager
+                rag_manager = JuridicalRAGManager()
+                
+                # Initialize MCP integration with RAG manager
+                self.rag_integration = MCPRAGIntegration(rag_manager)
                 self.rag_enabled = self.rag_integration.is_rag_available()
 
                 if self.rag_enabled:
@@ -155,17 +160,23 @@ class RAGClaudeMiddleware:
             rag_response = self.rag_integration.juridical_query(
                 query=prompt,
                 max_chunks=5,
-                similarity_threshold=0.6
+                similarity_threshold=0.05
             )
 
             if rag_response.get('success', False):
                 # RAG funcionou, usar contexto enriquecido
-                enhanced_prompt = rag_response.get('response', prompt)
+                context_chunks = rag_response.get('context_chunks', [])
+                rag_sources = rag_response.get('sources', [])
+                
+                # Extrair texto dos chunks para contexto
+                context_texts = [chunk.get('text', '') for chunk in context_chunks if chunk.get('text')]
 
                 # Chat Claude com contexto RAG
                 claude_response = self.claude_service.chat(
-                    prompt=enhanced_prompt,
-                    user_id=user_id
+                    prompt=prompt,
+                    user_id=user_id,
+                    context=context_texts,
+                    rag_sources=rag_sources
                 )
 
                 if claude_response.success:
