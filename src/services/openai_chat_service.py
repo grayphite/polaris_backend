@@ -181,8 +181,18 @@ class OpenAIChatService:
                     error=f"OpenAI API error: {openai_response.error}"
                 )
             
-            # Generate chat name based on user question
-            chat_name = self.generate_chat_name(user_question.strip(), ai_model)
+            # Check if this is the first AI chat in the conversation
+            existing_ai_chats_count = AIChat.query.filter_by(
+                chat_id=chat_id, 
+                user_id=user_id, 
+                is_deleted=False
+            ).count()
+            
+            # Only generate chat name for the first AI chat to minimize AI load
+            if existing_ai_chats_count == 0:
+                chat_name = self.generate_chat_name(user_question.strip(), ai_model)
+            else:
+                chat_name = ""  # Empty string for subsequent AI chats
             
             # Create AI chat record
             ai_chat = AIChat(

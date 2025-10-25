@@ -366,8 +366,18 @@ class AnthropicChatService:
                     # Pass through other events
                     yield event
             
-            # Generate chat name
-            chat_name = self.generate_chat_name(user_question.strip(), self.model)
+            # Check if this is the first AI chat in the conversation
+            existing_ai_chats_count = AIChat.query.filter_by(
+                chat_id=chat_id, 
+                user_id=user_id, 
+                is_deleted=False
+            ).count()
+            
+            # Only generate chat name for the first AI chat to minimize AI load
+            if existing_ai_chats_count == 0:
+                chat_name = self.generate_chat_name(user_question.strip(), self.model)
+            else:
+                chat_name = ""  # Empty string for subsequent AI chats
             
             # Create AI chat record (only after streaming is complete)
             try:
@@ -575,8 +585,18 @@ class AnthropicChatService:
                     error=f"Anthropic API error: {anthropic_response.error}"
                 )
             
-            # Generate chat name based on user question
-            chat_name = self.generate_chat_name(user_question.strip(), self.model)
+            # Check if this is the first AI chat in the conversation
+            existing_ai_chats_count = AIChat.query.filter_by(
+                chat_id=chat_id, 
+                user_id=user_id, 
+                is_deleted=False
+            ).count()
+            
+            # Only generate chat name for the first AI chat to minimize AI load
+            if existing_ai_chats_count == 0:
+                chat_name = self.generate_chat_name(user_question.strip(), self.model)
+            else:
+                chat_name = ""  # Empty string for subsequent AI chats
             
             # Create AI chat record
             ai_chat = AIChat(
