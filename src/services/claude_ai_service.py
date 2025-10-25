@@ -315,110 +315,110 @@ class ClaudeAIService:
     def _build_enhanced_prompt(self, prompt: str, context: List[str] = None, rag_sources: List[Dict] = None) -> str:
         """Construir prompt enriquecido com contexto"""
         if not context:
-            return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
+            return f"""You are a specialized assistant in wealth planning for tax lawyers.
 
-Responda de forma profissional e técnica, considerando:
-- Estruturas offshore (trusts, holdings, etc.)
-- Implicações fiscais no Brasil e internacionalmente
-- Compliance e regulamentações
-- Melhores práticas do setor
+Respond professionally and technically, considering:
+- Offshore structures (trusts, holdings, etc.)
+- Tax implications in Brazil and internationally
+- Compliance and regulations
+- Industry best practices
 
-Pergunta: {prompt}"""
+Question: {prompt}"""
 
         context_text = "\n".join([f"- {ctx}" for ctx in context])
         
         # Build source attribution if RAG sources are provided
         source_attribution = ""
         if rag_sources:
-            source_attribution = "\n\nIMPORTANTE: Ao responder, sempre mencione as fontes das informações quando usar o contexto acima. Inclua:\n"
-            source_attribution += "- Nome do documento/fonte\n"
-            source_attribution += "- País/jurisdição quando aplicável\n"
-            source_attribution += "- Seção ou capítulo relevante\n"
-            source_attribution += "- Exemplo: 'Conforme a Lei X do país Y, artigo Z...'\n"
-            source_attribution += "- Seja específico sobre a origem da informação\n\n"
+            source_attribution = "\n\nIMPORTANT: When responding, always mention the sources of information when using the context above. Include:\n"
+            source_attribution += "- Document/source name\n"
+            source_attribution += "- Country/jurisdiction when applicable\n"
+            source_attribution += "- Relevant section or chapter\n"
+            source_attribution += "- Example: 'According to Law X of country Y, article Z...'\n"
+            source_attribution += "- Be specific about the origin of the information\n\n"
 
-        return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
+        return f"""You are a specialized assistant in wealth planning for tax lawyers.
 
-CONTEXTO RELEVANTE ENCONTRADO:
+RELEVANT CONTEXT FOUND:
 {context_text}
-{source_attribution}Baseando-se no contexto acima e em seu conhecimento, responda de forma profissional e técnica, considerando:
-- Estruturas offshore (trusts, holdings, etc.)
-- Implicações fiscais no Brasil e internacionalmente
-- Compliance e regulamentações
-- Melhores práticas do setor
+{source_attribution}Based on the context above and your knowledge, respond professionally and technically, considering:
+- Offshore structures (trusts, holdings, etc.)
+- Tax implications in Brazil and internationally
+- Compliance and regulations
+- Industry best practices
 
-INSTRUÇÕES IMPORTANTES:
-- Se você usar informações do contexto acima, SEMPRE mencione a fonte específica
-- Indique o país/jurisdição quando aplicável
-- Seja transparente sobre de onde vem cada informação
-- Combine informações do contexto com seu conhecimento geral quando apropriado
+IMPORTANT INSTRUCTIONS:
+- If you use information from the context above, ALWAYS mention the specific source
+- Indicate the country/jurisdiction when applicable
+- Be transparent about where each piece of information comes from
+- Combine context information with your general knowledge when appropriate
 
-Pergunta: {prompt}"""
+Question: {prompt}"""
 
     def _build_document_prompt(self, document_type: str, client_data: Dict, template_data: Dict = None) -> str:
         """Construir prompt para geração de documento"""
         client_info = json.dumps(client_data, indent=2, ensure_ascii=False)
 
-        return f"""Você é um especialista em documentos jurídicos para wealth planning.
+        return f"""You are an expert in legal documents for wealth planning.
 
-Gere um documento profissional do tipo: {document_type.upper()}
+Generate a professional document of type: {document_type.upper()}
 
-DADOS DO CLIENTE:
+CLIENT DATA:
 {client_info}
 
-INSTRUÇÕES:
-1. Use linguagem jurídica apropriada
-2. Inclua todas as cláusulas necessárias
-3. Considere as melhores práticas internacionais
-4. Adapte para a legislação brasileira quando aplicável
-5. Formate de forma profissional
+INSTRUCTIONS:
+1. Use appropriate legal language
+2. Include all necessary clauses
+3. Consider international best practices
+4. Adapt to Brazilian legislation when applicable
+5. Format professionally
 
-Gere o documento completo:"""
+Generate the complete document:"""
 
     def _build_analysis_prompt(self, structure_data: Dict, jurisdiction: str = None) -> str:
         """Construir prompt para análise jurídica"""
         structure_info = json.dumps(structure_data, indent=2, ensure_ascii=False)
-        jurisdiction_text = f" na jurisdição {jurisdiction}" if jurisdiction else ""
+        jurisdiction_text = f" in jurisdiction {jurisdiction}" if jurisdiction else ""
 
-        return f"""Você é um especialista em estruturas jurídicas internacionais.
+        return f"""You are an expert in international legal structures.
 
-Analise a seguinte estrutura{jurisdiction_text}:
+Analyze the following structure{jurisdiction_text}:
 
-ESTRUTURA:
+STRUCTURE:
 {structure_info}
 
-FORNEÇA:
-1. Análise detalhada da estrutura
-2. Vantagens e desvantagens
-3. Riscos identificados
-4. Recomendações de melhoria
-5. Considerações fiscais
-6. Aspectos de compliance
+PROVIDE:
+1. Detailed analysis of the structure
+2. Advantages and disadvantages
+3. Identified risks
+4. Improvement recommendations
+5. Tax considerations
+6. Compliance aspects
 
-Análise:"""
+Analysis:"""
 
     def _build_recommendations_prompt(self, client_profile: Dict, objectives: List[str]) -> str:
         """Construir prompt para recomendações"""
         profile_info = json.dumps(client_profile, indent=2, ensure_ascii=False)
         objectives_text = "\n".join([f"- {obj}" for obj in objectives])
 
-        return f"""Você é um consultor especializado em wealth planning.
+        return f"""You are a specialized consultant in wealth planning.
 
-PERFIL DO CLIENTE:
+CLIENT PROFILE:
 {profile_info}
 
-OBJETIVOS:
+OBJECTIVES:
 {objectives_text}
 
-Forneça recomendações personalizadas incluindo:
-1. Estruturas jurídicas recomendadas
-2. Jurisdições mais adequadas
-3. Estratégias fiscais
-4. Cronograma de implementação
-5. Riscos e mitigações
-6. Próximos passos
+Provide personalized recommendations including:
+1. Recommended legal structures
+2. Most suitable jurisdictions
+3. Tax strategies
+4. Implementation timeline
+5. Risks and mitigations
+6. Next steps
 
-Recomendações:"""
+Recommendations:"""
 
     def _get_relevant_context(self, prompt: str) -> List[str]:
         """Buscar contexto relevante para RAG"""
