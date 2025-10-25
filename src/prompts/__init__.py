@@ -3,12 +3,14 @@ Prompts Module for POLARIS Backend
 Centralized system prompts for different AI services
 """
 
-from .anthropic_chat_system_prompt import (
-    get_anthropic_chat_system_prompt,
-    get_anthropic_chat_system_prompt_with_rag_metadata
+from .adaptive_system_prompt import (
+    get_adaptive_system_prompt,
+    detect_question_type,
+    get_tax_agent_rag_configuration
 )
 
 __all__ = [
-    'get_anthropic_chat_system_prompt',
-    'get_anthropic_chat_system_prompt_with_rag_metadata'
+    'get_adaptive_system_prompt',
+    'detect_question_type',
+    'get_tax_agent_rag_configuration'
 ]

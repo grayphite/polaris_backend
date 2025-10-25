@@ -271,7 +271,8 @@ class AnthropicChatService:
                 }
             
             # Get system prompt from prompts module
-            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt_with_rag_metadata
+            # Use adaptive prompt for both tax and general questions
+            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
             
             # Prepare RAG sources for prompt enhancement
             rag_sources = []
@@ -279,10 +280,12 @@ class AnthropicChatService:
                 context_chunks = rag_metadata.get('context_chunks', [])
                 rag_sources = context_chunks
             
-            # Get enhanced system prompt
-            system_context = get_anthropic_chat_system_prompt_with_rag_metadata(
+            # Detect question type and get adaptive system prompt
+            question_type = detect_question_type(user_question)
+            system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
-                rag_metadata=rag_metadata
+                rag_metadata=rag_metadata,
+                question_type=question_type
             )
             
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
@@ -546,11 +549,14 @@ class AnthropicChatService:
                 )
             
             # Get system prompt from prompts module
-            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            # Use tax agent prompt for consistent tax-specific responses
+            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
             
-            # Get system prompt (no RAG support in this method)
-            system_context = get_anthropic_chat_system_prompt(
-                conversation_context=conversation_context
+            # Detect question type and get adaptive system prompt
+            question_type = detect_question_type(user_question)
+            system_context = get_adaptive_system_prompt(
+                conversation_context=conversation_context,
+                question_type=question_type
             )
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
@@ -1225,11 +1231,13 @@ Name:"""
             start_time = time.time()
             
             # Get system prompt from prompts module
-            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
             
             # Get system prompt
-            system_context = get_anthropic_chat_system_prompt(
-                conversation_context=conversation_context
+            question_type = detect_question_type(user_question)
+            system_context = get_adaptive_system_prompt(
+                conversation_context=conversation_context,
+                question_type=question_type
             )
 
             # Build the user message content
@@ -1440,11 +1448,13 @@ Name:"""
             start_time = time.time()
             
             # Get system prompt from prompts module
-            from src.prompts.anthropic_chat_system_prompt import get_anthropic_chat_system_prompt
+            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
             
             # Get system prompt
-            system_context = get_anthropic_chat_system_prompt(
-                conversation_context=conversation_context
+            question_type = detect_question_type(user_question)
+            system_context = get_adaptive_system_prompt(
+                conversation_context=conversation_context,
+                question_type=question_type
             )
 
             # Build the user message content (no system text embedded)
