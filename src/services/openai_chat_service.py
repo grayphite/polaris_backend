@@ -94,7 +94,7 @@ class OpenAIChatService:
 
     def _verify_chat_access(self, chat_id: int, user_id: int) -> bool:
         """
-        Verify user has access to the chat
+        Verify user has access to the chat (either owns it or it's from a public project)
         
         Args:
             chat_id: ID of the chat
@@ -105,10 +105,14 @@ class OpenAIChatService:
         """
         chat = Chat.query.filter_by(
             id=chat_id,
-            created_by=user_id,
             is_deleted=False
         ).first()
-        return chat is not None
+        
+        if not chat:
+            return False
+        
+        # Allow access if user owns the chat OR if the parent project is public
+        return chat.created_by == user_id or chat.project.is_public
 
     def _touch_chat(self, chat_id: int):
         """

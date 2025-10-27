@@ -154,6 +154,45 @@ def list_projects():
     return jsonify(result)
 
 
+@project_bp.route('/public-projects', methods=['GET'])
+@handle_errors
+@log_action(ActionType.READ, "public_projects")
+def list_public_projects():
+    """
+    List all public projects with pagination and search
+    
+    Query parameters:
+    - page: Page number (default: 1)
+    - per_page: Items per page (default: 10, max: 100)
+    - search: Search query
+    """
+    # Parse query parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 10, type=int), 100)
+    search = request.args.get('search', '').strip()
+    
+    # Fetch from service
+    result = project_service.list_public_projects(
+        page=page,
+        per_page=per_page,
+        search=search
+    )
+    
+    logging_service.info(
+        "ProjectRoutes",
+        "GET_PUBLIC_PROJECTS",
+        f"Public projects listed",
+        metadata={
+            'page': page,
+            'per_page': per_page,
+            'search': search,
+            'total_found': result.get('pagination', {}).get('total', 0)
+        }
+    )
+    
+    return jsonify(result)
+
+
 @project_bp.route('/projects/<int:project_id>', methods=['GET'])
 @auth_service.require_auth
 @handle_errors
@@ -186,7 +225,7 @@ def get_project(project_id):
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['name'],
-    optional_fields=['description']
+    optional_fields=['description', 'is_public']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "project")
@@ -199,7 +238,8 @@ def create_project():
     result = project_service.create_project(
         name=data['name'],
         user_id=current_user.id,
-        description=data.get('description')
+        description=data.get('description'),
+        is_public=data.get('is_public', False)
     )
     
     if not result.success:

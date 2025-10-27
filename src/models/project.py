@@ -29,6 +29,9 @@ class Project(db.Model):
     # Soft delete flag
     is_deleted = db.Column(db.Boolean, default=False, nullable=False, index=True)
     
+    # Public/Private flag
+    is_public = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    
     # Relationships
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_projects')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_projects')
@@ -48,7 +51,8 @@ class Project(db.Model):
             'deleted_at': self.deleted_at.isoformat() if self.deleted_at else None,
             'created_by': self.created_by,
             'deleted_by': self.deleted_by,
-            'is_deleted': self.is_deleted
+            'is_deleted': self.is_deleted,
+            'is_public': self.is_public
         }
     
     def to_summary_dict(self):
@@ -61,6 +65,7 @@ class Project(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'created_by': self.created_by,
             'is_deleted': self.is_deleted,
+            'is_public': self.is_public,
             'chat_count': len([chat for chat in self.chats if not chat.is_deleted])
         }
 

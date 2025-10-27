@@ -33,7 +33,7 @@ class ProjectService:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def create_project(self, name: str, user_id: int,
-                      description: Optional[str] = None) -> ProjectResult:
+                      description: Optional[str] = None, is_public: bool = False) -> ProjectResult:
         """
         Create a new project
         
@@ -41,6 +41,7 @@ class ProjectService:
             name: Name of the project
             user_id: ID of the user creating the project
             description: Optional project description
+            is_public: Whether the project should be public (default: False)
             
         Returns:
             ProjectResult with success status and project data
@@ -64,7 +65,8 @@ class ProjectService:
                 name=name.strip(),
                 description=description,
                 created_by=user_id,
-                is_deleted=False
+                is_deleted=False,
+                is_public=is_public
             )
             
             db.session.add(project)
@@ -171,6 +173,67 @@ class ProjectService:
             
         except Exception as e:
             error_msg = f"Error listing projects: {str(e)}"
+            self.logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg,
+                'projects': [],
+                'pagination': {}
+            }
+
+    def list_public_projects(self, page: int = 1, per_page: int = 20,
+                            search: str = None) -> Dict:
+        """
+        List all public projects with pagination and search
+        
+        Args:
+            page: Page number (1-indexed)
+            per_page: Items per page
+            search: Optional search query
+            
+        Returns:
+            Dictionary with projects list and pagination metadata
+        """
+        try:
+            query = Project.query.filter_by(is_public=True, is_deleted=False)
+            
+            # Search functionality
+            if search and search.strip():
+                search_term = f"%{search.strip()}%"
+                query = query.filter(
+                    or_(
+                        Project.name.ilike(search_term),
+                        Project.description.ilike(search_term)
+                    )
+                )
+            
+            # Order by created_at descending
+            query = query.order_by(Project.created_at.desc())
+            
+            # Paginate
+            pagination = query.paginate(
+                page=page,
+                per_page=per_page,
+                error_out=False
+            )
+            
+            projects = [project.to_summary_dict() for project in pagination.items]
+            
+            return {
+                'success': True,
+                'projects': projects,
+                'pagination': {
+                    'total': pagination.total,
+                    'pages': pagination.pages,
+                    'current_page': page,
+                    'per_page': per_page,
+                    'has_next': pagination.has_next,
+                    'has_prev': pagination.has_prev
+                }
+            }
+            
+        except Exception as e:
+            error_msg = f"Error listing public projects: {str(e)}"
             self.logger.error(error_msg)
             return {
                 'success': False,

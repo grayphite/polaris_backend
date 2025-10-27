@@ -50,21 +50,25 @@ class ChatService:
 
     def _verify_project_access(self, project_id: int, user_id: int) -> bool:
         """
-        Verify user owns the project
+        Verify user has access to the project (either owns it or it's public)
         
         Args:
             project_id: ID of the project
             user_id: ID of the user
             
         Returns:
-            True if user owns project, False otherwise
+            True if user has access, False otherwise
         """
         project = Project.query.filter_by(
             id=project_id,
-            created_by=user_id,
             is_deleted=False
         ).first()
-        return project is not None
+        
+        if not project:
+            return False
+        
+        # Allow access if user owns the project OR if project is public
+        return project.created_by == user_id or project.is_public
 
     def create_chat(self, name: str, project_id: int, user_id: int,
                    description: Optional[str] = None) -> ChatResult:
@@ -184,8 +188,13 @@ class ChatService:
             Dictionary with chats list and pagination metadata
         """
         try:
-            # Start with chats from user's projects
-            query = Chat.query.join(Project).filter(Project.created_by == user_id)
+            # Start with chats from user's projects OR public projects
+            query = Chat.query.join(Project).filter(
+                or_(
+                    Project.created_by == user_id,  # User's own projects
+                    Project.is_public == True        # Public projects
+                )
+            )
             
             # Filter by project if specified
             if project_id:
@@ -512,7 +521,12 @@ class ChatService:
             Dictionary with chat statistics
         """
         try:
-            base_query = Chat.query.join(Project).filter(Project.created_by == user_id)
+            base_query = Chat.query.join(Project).filter(
+                or_(
+                    Project.created_by == user_id,  # User's own projects
+                    Project.is_public == True        # Public projects
+                )
+            )
             
             if project_id:
                 if not self._verify_project_access(project_id, user_id):
