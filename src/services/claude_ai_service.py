@@ -317,7 +317,9 @@ class ClaudeAIService:
         if not context:
             return f"""You are a specialized assistant in wealth planning for tax lawyers.
 
-Respond professionally and technically, considering:
+Respond professionally and concisely, focusing only on relevant details. Keep responses brief and to the point.
+
+Consider:
 - Offshore structures (trusts, holdings, etc.)
 - Tax implications in Brazil and internationally
 - Compliance and regulations
@@ -331,7 +333,6 @@ Question: {prompt}"""
         source_attribution = ""
         if rag_sources:
             source_attribution = "\n\nIMPORTANT: When responding, always mention the sources of information when using the context above. Include:\n"
-            source_attribution += "- Document/source name\n"
             source_attribution += "- Country/jurisdiction when applicable\n"
             source_attribution += "- Relevant section or chapter\n"
             source_attribution += "- Example: 'According to Law X of country Y, article Z...'\n"
@@ -341,17 +342,13 @@ Question: {prompt}"""
 
 RELEVANT CONTEXT FOUND:
 {context_text}
-{source_attribution}Based on the context above and your knowledge, respond professionally and technically, considering:
+{source_attribution}Based on the context above and your knowledge, respond professionally and concisely, focusing only on relevant details. Keep responses brief and to the point.
+
+Consider:
 - Offshore structures (trusts, holdings, etc.)
 - Tax implications in Brazil and internationally
 - Compliance and regulations
 - Industry best practices
-
-IMPORTANT INSTRUCTIONS:
-- If you use information from the context above, ALWAYS mention the specific source
-- Indicate the country/jurisdiction when applicable
-- Be transparent about where each piece of information comes from
-- Combine context information with your general knowledge when appropriate
 
 Question: {prompt}"""
 
@@ -421,41 +418,41 @@ Provide personalized recommendations including:
 Recommendations:"""
 
     def _get_relevant_context(self, prompt: str) -> List[str]:
-        """Buscar contexto relevante para RAG"""
+        """Search for relevant context for RAG"""
         try:
-            # Aqui integraria com o SearchService quando implementado
-            # Por enquanto, retorna contexto básico
+            # Here would integrate with SearchService when implemented
+            # For now, returns basic context
             return [
-                "Wealth planning envolve estruturas offshore para otimização fiscal",
-                "Trusts são veículos comuns para proteção patrimonial",
-                "Compliance internacional é crucial para estruturas offshore"
+                "Wealth planning involves offshore structures for tax optimization",
+                "Trusts are common vehicles for asset protection",
+                "International compliance is crucial for offshore structures"
             ]
         except:
             return []
 
     def _get_legal_context(self, structure_data: Dict, jurisdiction: str = None) -> List[str]:
-        """Buscar contexto jurídico específico"""
+        """Search for specific legal context"""
         try:
-            # Aqui integraria com o LegalScrapingService quando implementado
+            # Here would integrate with LegalScrapingService when implemented
             return [
-                "Regulamentações internacionais sobre estruturas offshore",
-                "Tratados de bitributação aplicáveis",
-                "Requisitos de compliance por jurisdição"
+                "International regulations on offshore structures",
+                "Applicable double taxation treaties",
+                "Compliance requirements by jurisdiction"
             ]
         except:
             return []
 
     def _get_wealth_planning_context(self, client_profile: Dict) -> List[str]:
-        """Buscar contexto de wealth planning"""
+        """Search for wealth planning context"""
         try:
-            # Contexto baseado no perfil do cliente
+            # Context based on client profile
             context = []
 
             if client_profile.get('patrimonio_estimado', 0) > 10000000:
-                context.append("Cliente high net worth - estruturas complexas recomendadas")
+                context.append("High net worth client - complex structures recommended")
 
             if client_profile.get('nacionalidade') == 'brasileira':
-                context.append("Considerações específicas para residentes fiscais brasileiros")
+                context.append("Specific considerations for Brazilian tax residents")
 
             return context
         except:
