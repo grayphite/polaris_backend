@@ -16,10 +16,11 @@ from .chat import Chat
 from .ai_chat import AIChat, AIStats
 from .team import Team, TeamMember
 from .invitation import Invitation
+from .stripe_payment import PaymentPlan, PlanPrice, TeamSubscription
 
 __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
     'LegalSource', 'ScrapedContent', 'Project', 'Chat', 'AIChat', 'AIStats',
-    'Team', 'TeamMember', 'Invitation'
+    'Team', 'TeamMember', 'Invitation', 'PaymentPlan', 'PlanPrice', 'TeamSubscription'
 ]

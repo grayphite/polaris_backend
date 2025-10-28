@@ -157,3 +157,4 @@ wrapt==1.17.3
 wsproto==1.2.0
 zipp==3.23.0
 zopfli==0.2.3.post1
+stripe==10.0.0

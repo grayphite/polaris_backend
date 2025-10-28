@@ -170,3 +170,4 @@ class TeamMember(db.Model):
         """Check if member can remove other members"""
         return self.role in ['owner', 'admin'] or self.has_permission('remove_members')
 
+
