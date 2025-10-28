@@ -690,10 +690,10 @@ class InvitationService:
             inviter = User.query.get(invitation.inviter_id)
             inviter_name = f"{inviter.first_name} {inviter.last_name}" if inviter else "Unknown User"
             
-            # Create invitation link (you'll need to configure your frontend URL)
-            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
-            invitation_link = f"{frontend_url}/invitation/{invitation.token}"
-            
+            # Create an invitation link (you'll need to configure your frontend URL)
+            frontend_url = os.getenv('FRONTEND_URL', 'https://polaris-dev.netlify.app')
+            invitation_link = f"{frontend_url}/invitation/setup-account/{invitation.token}"
+
             # Calculate days until expiry
             days_until_expiry = invitation.days_until_expiry()
             
