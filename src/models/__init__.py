@@ -14,9 +14,12 @@ from .user import User
 from .project import Project
 from .chat import Chat
 from .ai_chat import AIChat, AIStats
+from .team import Team, TeamMember
+from .invitation import Invitation
 
 __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
-    'LegalSource', 'ScrapedContent', 'Project', 'Chat', 'AIChat', 'AIStats'
+    'LegalSource', 'ScrapedContent', 'Project', 'Chat', 'AIChat', 'AIStats',
+    'Team', 'TeamMember', 'Invitation'
 ]

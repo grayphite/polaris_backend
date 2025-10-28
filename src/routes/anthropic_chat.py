@@ -411,7 +411,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -444,7 +444,8 @@ def send_message():
         conversation_context=data.get('conversation_context'),
         context_limit=context_limit,
         file_references=data.get('file_references'),
-        file_reference_details=data.get('file_reference_details')
+        file_reference_details=data.get('file_reference_details'),
+        use_rag=data.get('use_rag', False)
     )
     
     if not result.success:

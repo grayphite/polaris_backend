@@ -417,7 +417,8 @@ class AnthropicChatService:
                             'tokens_saved': truncation_result.tokens_saved,
                             'context_truncated': truncation_result.messages_skipped > 0
                         }
-                    }
+                    },
+                    rag_metadata=rag_metadata
                 )
                 
                 db.session.add(ai_chat)
@@ -478,7 +479,8 @@ class AnthropicChatService:
 
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
                       conversation_context: str = None, context_limit: int = 10, 
-                      file_references: list = None, file_reference_details: list = None) -> AIChatResult:
+                      file_references: list = None, file_reference_details: list = None,
+                      use_rag: bool = False) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -580,6 +582,44 @@ class AnthropicChatService:
                 self.logger.info(f"Context truncated: {truncation_result.messages_skipped} messages skipped, "
                                f"{truncation_result.tokens_saved} tokens saved")
             
+            # RAG Enhancement (if enabled)
+            rag_metadata = {}
+            if use_rag:
+                try:
+                    # Use system defaults for RAG parameters
+                    rag_result = self._try_rag_enhancement(
+                        user_question=user_question,
+                        similarity_threshold=None,  # Use system default
+                        max_chunks=None,  # Use system default
+                        rag_sources=None
+                    )
+                    if rag_result['success']:
+                        # Enhance conversation context with RAG
+                        conversation_context = self._enhance_context_with_rag(
+                            conversation_context, 
+                            rag_result
+                        )
+                        rag_metadata = rag_result.get('metadata', {})
+                    else:
+                        rag_metadata = {
+                            'rag_enabled': False,
+                            'fallback_reason': rag_result.get('error', 'RAG failed'),
+                            'processing_mode': 'fallback'
+                        }
+                except Exception as e:
+                    self.logger.warning(f"RAG enhancement failed: {str(e)}")
+                    rag_metadata = {
+                        'rag_enabled': False,
+                        'fallback_reason': f'RAG error: {str(e)}',
+                        'processing_mode': 'error'
+                    }
+            else:
+                rag_metadata = {
+                    'rag_enabled': False,
+                    'fallback_reason': 'RAG not requested',
+                    'processing_mode': 'normal'
+                }
+            
             # Get AI response from Anthropic Claude
             anthropic_response = self._get_anthropic_response(
                 user_question,
@@ -638,7 +678,8 @@ class AnthropicChatService:
                         'tokens_saved': truncation_result.tokens_saved,
                         'context_truncated': truncation_result.messages_skipped > 0
                     }
-                }
+                },
+                rag_metadata=rag_metadata
             )
             
             db.session.add(ai_chat)
