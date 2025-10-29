@@ -115,9 +115,10 @@ class InvitationService:
                     error="Access denied or team not found"
                 )
             
-            # Check if invited user exists and is already a member
+            # Check if invited email is already registered in the system
             invited_user = User.query.filter_by(email=invited_email).first()
             if invited_user:
+                # User is already registered - check if already a member
                 existing_member = TeamMember.query.filter_by(
                     team_id=team_id,
                     user_id=invited_user.id,
@@ -129,6 +130,12 @@ class InvitationService:
                         success=False,
                         error="User is already a member of this team"
                     )
+                
+                # User exists but not a member - return error (don't send invitation email)
+                return InvitationResult(
+                    success=False,
+                    error="This User is already registered in the system. Please add different email to invite peaple in the system."
+                )
             
             # Check for existing pending invitation
             existing_invitation = Invitation.query.filter_by(

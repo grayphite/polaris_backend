@@ -228,6 +228,9 @@ def create_invitation(team_id):
     )
     
     if not result.success:
+        # Check if error is about user already being registered
+        if "already registered" in result.error.lower():
+            return jsonify({'error': result.error}), 409
         return jsonify({'error': result.error}), 400
     
     # Audit log
