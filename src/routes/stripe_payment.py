@@ -116,14 +116,16 @@ def preview_member_addition(team_id):
     """Preview cost of adding a team member."""
     validation = UsageBillingService.validate_can_add_team_member(team_id)
     
-    if not validation.get('allowed'):
-        return jsonify({'error': validation.get('reason', 'Cannot add member')}), 400
-    
+    # Always return the same response structure with allowed flag
     return jsonify({
+        'allowed': validation.get('allowed', False),
         'will_be_overage': validation.get('will_be_overage', False),
         'additional_member_cost_cents': validation.get('additional_member_cost_cents', 0),
-        'currency': validation.get('currency', 'brl')
-    })
+        'currency': validation.get('currency', 'brl'),
+        'current_active_members': validation.get('current_active_members', 0),
+        'included_members_in_plan': validation.get('included_members_in_plan', 0),
+        'additional_members': validation.get('additional_members', 0)
+    }), 200
 
 
 @bp.route('/subscriptions/<int:team_id>/members/add', methods=['POST'])

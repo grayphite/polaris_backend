@@ -66,17 +66,33 @@ class UsageBillingService:
     def validate_can_add_team_member(team_id: int) -> Dict[str, Any]:
         info = UsageBillingService.calculate_team_member_overage(team_id)
         if info is None:
-            return {"allowed": False, "reason": "Missing subscription or team"}
+            return {
+                "allowed": False,
+                "will_be_overage": False,
+                "additional_member_cost_cents": 0,
+                "currency": "brl",
+                "current_active_members": 0,
+                "included_members_in_plan": 0,
+                "additional_members": 0,
+                "reason": "Missing subscription or team"
+            }
         
-        # Check if adding one more member would exceed plan limits
-        if info.current_active_members < info.included_members_in_plan:
-            return {"allowed": True, "will_be_overage": False}
+        # allowed: true if current members < plan limit, false if at or over limit
+        allowed = info.current_active_members < info.included_members_in_plan
         
-        # Next add will be overage - still allowed but will cost extra
+        # Calculate if adding one more member would exceed plan limits
+        will_be_overage = info.current_active_members >= info.included_members_in_plan
+        # Calculate how many members would be over limit after adding 1 more
+        future_member_count = info.current_active_members + 1
+        additional_members = max(0, future_member_count - info.included_members_in_plan)
+        
         return {
-            "allowed": True,
-            "will_be_overage": True,
-            "additional_member_cost_cents": info.additional_member_cost_cents,
+            "allowed": allowed,
+            "will_be_overage": will_be_overage,
+            "current_active_members": info.current_active_members,
+            "included_members_in_plan": info.included_members_in_plan,
+            "additional_members": additional_members,
+            "additional_member_cost_cents": info.additional_member_cost_cents if will_be_overage else 0,
             "currency": info.currency,
         }
 
