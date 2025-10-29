@@ -258,7 +258,16 @@ def create_invitation(team_id):
         }
     )
     
-    return jsonify(result.invitation), 201
+    response_payload = {
+        **(result.invitation or {}),
+    }
+    # Surface billing intent/preview if available
+    if getattr(result, 'billing_intent', None) is not None:
+        response_payload['billing_intent'] = result.billing_intent
+    if getattr(result, 'overage_preview', None) is not None:
+        response_payload['overage_preview'] = result.overage_preview
+
+    return jsonify(response_payload), 201
 
 
 @invitation_bp.route('/invitations/<token>/accept', methods=['POST'])

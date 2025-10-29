@@ -18,6 +18,7 @@ from src.models.team import Team, TeamMember
 from src.models.user import User
 from src.services.team_service import team_service
 from src.services.email_service import email_service
+from src.services.payment_services.usage_billing_service import UsageBillingService
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ class InvitationResult:
     invitation: Optional[Dict] = None
     error: Optional[str] = None
     message: Optional[str] = None
+    # Optional overage/billing preview surfaced at invitation time (no charge yet)
+    billing_intent: Optional[Dict] = None
+    overage_preview: Optional[Dict] = None
 
 
 class InvitationService:
@@ -140,6 +144,31 @@ class InvitationService:
                     error="A pending invitation already exists for this email"
                 )
             
+            # Calculate overage preview BEFORE creating invitation (no charge here)
+            billing_intent = None
+            overage_preview = None
+            try:
+                info = UsageBillingService.calculate_team_member_overage(team_id)
+                if info is not None:
+                    will_be_overage = info.current_active_members >= info.included_members_in_plan
+                    overage_preview = {
+                        'will_be_overage_if_accepted': will_be_overage,
+                        'current_active_members': info.current_active_members,
+                        'included_members_in_plan': info.included_members_in_plan,
+                        'additional_member_cost_cents': info.additional_member_cost_cents,
+                        'currency': info.currency,
+                    }
+                    if will_be_overage:
+                        billing_intent = {
+                            'action': 'increase_subscription_quantity_on_accept',
+                            'additional_member_cost_cents': info.additional_member_cost_cents,
+                            'currency': info.currency,
+                            'message': 'Invite will cause overage when accepted; extra seat will be billed next invoice.'
+                        }
+            except Exception:
+                # Do not block invitation if preview fails
+                pass
+
             # Create invitation
             invitation = Invitation.create_invitation(
                 team_id=team_id,
@@ -158,10 +187,15 @@ class InvitationService:
             
             self.logger.info(f"Invitation created: {invitation.id} for team {team_id} by user {inviter_id}")
             
+            inv_dict = invitation.to_dict()
+            if overage_preview is not None:
+                inv_dict['overage_preview'] = overage_preview
             return InvitationResult(
                 success=True,
-                invitation=invitation.to_dict(),
-                message="Invitation sent successfully"
+                invitation=inv_dict,
+                message="Invitation sent successfully",
+                billing_intent=billing_intent,
+                overage_preview=overage_preview
             )
             
         except Exception as e:

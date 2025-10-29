@@ -53,7 +53,8 @@ class AuthService:
         self.reset_password_expiry_minutes = 30
 
     def register_user(self, username: str, email: str, password: str,
-                      first_name: str = None, last_name: str = None) -> AuthResult:
+                      first_name: str = None, last_name: str = None, 
+                      role: str = 'owner') -> AuthResult:
         """
         Registrar novo usuário
         
@@ -63,6 +64,7 @@ class AuthService:
             password: Senha em texto plano
             first_name: Primeiro nome (opcional)
             last_name: Último nome (opcional)
+            role: Role do usuário (default: 'member', can be 'member' or 'owner')
             
         Returns:
             AuthResult com resultado da operação
@@ -93,6 +95,11 @@ class AuthService:
                     error=validation_error
                 )
 
+            # Validate role
+            valid_roles = ['owner', 'member']
+            if role not in valid_roles:
+                role = 'owner'  # Default to owner if invalid
+
             # Hash da senha
             password_hash = self._hash_password(password)
 
@@ -102,7 +109,8 @@ class AuthService:
                 email=email,
                 password_hash=password_hash,
                 first_name=first_name or '',
-                last_name=last_name or ''
+                last_name=last_name or '',
+                role=role  # Set role from parameter
             )
 
             db.session.add(user)
