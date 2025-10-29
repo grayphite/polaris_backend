@@ -199,7 +199,8 @@ class TeamService:
             return None
 
     def list_teams(self, user_id: int, page: int = 1, per_page: int = 20,
-                   search: str = None, include_deleted: bool = False) -> Dict:
+                   search: str = None, include_deleted: bool = False,
+                   teams_filter: str = 'own-teams') -> Dict:
         """
         List teams where user is owner or member
         
@@ -209,18 +210,26 @@ class TeamService:
             per_page: Items per page
             search: Optional search query
             include_deleted: Whether to include soft-deleted teams
+            teams_filter: Filter type - 'own-teams' or 'enrolled-teams' (default: 'own-teams')
             
         Returns:
             Dictionary with teams list and pagination metadata
         """
         try:
-            # Start with teams where user is owner or member
-            query = Team.query.join(TeamMember).filter(
-                or_(
-                    Team.created_by == user_id,  # User's own teams
-                    TeamMember.user_id == user_id  # Teams where user is member
+            # Build query based on filter
+            if teams_filter == 'own-teams':
+                # Only teams owned by user
+                query = Team.query.filter(Team.created_by == user_id)
+            elif teams_filter == 'enrolled-teams':
+                # Only teams where user is a member but NOT the owner
+                query = Team.query.join(TeamMember).filter(
+                    TeamMember.user_id == user_id,
+                    TeamMember.is_deleted == False,
+                    Team.created_by != user_id
                 )
-            )
+            else:
+                # Default to own-teams if invalid filter
+                query = Team.query.filter(Team.created_by == user_id)
             
             # Filter deleted teams
             if not include_deleted:
@@ -235,6 +244,9 @@ class TeamService:
                         Team.description.ilike(search_term)
                     )
                 )
+            
+            # Remove duplicates (in case user is both owner and member)
+            query = query.distinct()
             
             # Order by created_at descending
             query = query.order_by(Team.created_at.desc())

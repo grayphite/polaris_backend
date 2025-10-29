@@ -120,6 +120,9 @@ def list_teams():
     - per_page: Items per page (default: 10, max: 100)
     - search: Search query
     - include_deleted: Include soft-deleted teams (default: false)
+    - teams-filter: Filter type - 'own-teams' or 'enrolled-teams' (default: 'own-teams')
+    
+    Response includes a 'teams-filter' key indicating which filter was applied.
     """
     current_user = get_current_user()
     
@@ -128,6 +131,17 @@ def list_teams():
     per_page = min(request.args.get('per_page', 10, type=int), 100)
     search = request.args.get('search', '').strip()
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+    teams_filter = request.args.get('teams-filter', 'own-teams').strip()  # Default to 'own-teams'
+    
+    # Validate teams_filter
+    if teams_filter and teams_filter not in ['own-teams', 'enrolled-teams']:
+        return jsonify({
+            'error': 'Invalid teams-filter. Must be "own-teams" or "enrolled-teams"'
+        }), 400
+    
+    # Ensure teams_filter is set (default to 'own-teams' if empty)
+    if not teams_filter:
+        teams_filter = 'own-teams'
     
     # Fetch from service
     result = team_service.list_teams(
@@ -135,8 +149,12 @@ def list_teams():
         page=page,
         per_page=per_page,
         search=search,
-        include_deleted=include_deleted
+        include_deleted=include_deleted,
+        teams_filter=teams_filter
     )
+    
+    # Add teams-filter key to response
+    result['teams-filter'] = teams_filter
     
     logging_service.info(
         "TeamRoutes",
@@ -147,6 +165,7 @@ def list_teams():
             'page': page,
             'per_page': per_page,
             'search': search,
+            'teams_filter': teams_filter,
             'total_found': result.get('pagination', {}).get('total', 0)
         }
     )
