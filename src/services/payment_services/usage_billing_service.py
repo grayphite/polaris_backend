@@ -40,7 +40,8 @@ class UsageBillingService:
         plan: PaymentPlan = subscription.plan
         price: PlanPrice = subscription.price
 
-        active_members = len([m for m in team.members if not m.is_deleted])
+        # Count only members, excluding the team owner
+        active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
         included = plan.max_team_members_per_team if plan.max_team_members_per_team >= 0 else active_members
         overage = max(0, active_members - included)
 
@@ -106,7 +107,8 @@ class UsageBillingService:
         subscription = UsageBillingService.get_active_subscription(team_id)
         if not team or not subscription:
             return False
-        active_members = len([m for m in team.members if not m.is_deleted])
+        # Count only members, excluding the team owner
+        active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
         needs_update = subscription.quantity != active_members
         # Placeholder: when integrated, update Stripe and then local subscription.quantity
         return needs_update
