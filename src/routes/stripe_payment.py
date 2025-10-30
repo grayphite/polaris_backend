@@ -258,21 +258,25 @@ def stripe_webhook():
     except stripe._error.SignatureVerificationError as e:
         return jsonify({'error': f'Invalid signature: {str(e)}'}), 400
     
-    # Handle the event
-    if event['type'] == 'checkout.session.completed':
-        handle_checkout_completed(event['data']['object'])
-    elif event['type'] == 'customer.subscription.created':
-        handle_subscription_created(event['data']['object'])
-    elif event['type'] == 'customer.subscription.updated':
-        handle_subscription_updated(event['data']['object'])
-    elif event['type'] == 'customer.subscription.deleted':
-        handle_subscription_deleted(event['data']['object'])
-    elif event['type'] == 'invoice.payment_succeeded':
-        handle_payment_succeeded(event['data']['object'])
-    elif event['type'] == 'invoice.payment_failed':
-        handle_payment_failed(event['data']['object'])
-    else:
-        print(f'Unhandled event type: {event["type"]}')
+    # Handle the event (defensive - never 500 to Stripe)
+    try:
+        if event['type'] == 'checkout.session.completed':
+            handle_checkout_completed(event['data']['object'])
+        elif event['type'] == 'customer.subscription.created':
+            handle_subscription_created(event['data']['object'])
+        elif event['type'] == 'customer.subscription.updated':
+            handle_subscription_updated(event['data']['object'])
+        elif event['type'] == 'customer.subscription.deleted':
+            handle_subscription_deleted(event['data']['object'])
+        elif event['type'] == 'invoice.payment_succeeded':
+            handle_payment_succeeded(event['data']['object'])
+        elif event['type'] == 'invoice.payment_failed':
+            handle_payment_failed(event['data']['object'])
+        else:
+            print(f'Unhandled event type: {event["type"]}')
+    except Exception as e:
+        # Log and still return 200 so Stripe stops retrying
+        print(f'ERROR handling webhook {event.get("type")}: {e}')
     
     return jsonify({'status': 'success'})
 
@@ -311,30 +315,54 @@ def handle_checkout_completed(session):
 
 
 def handle_subscription_created(subscription):
-    """Handle new subscription creation."""
-    metadata = subscription.get('metadata', {})
-    team_id = metadata.get('team_id')
-    
-    if not team_id:
-        print(f'Missing team_id in subscription metadata: {subscription["id"]}')
-        return
-    
-    # Update local subscription
-    local_subscription = TeamSubscription.query.filter_by(
-        team_id=int(team_id), 
-        is_deleted=False
-    ).first()
-    
-    if local_subscription:
-        local_subscription.stripe_subscription_id = subscription['id']
-        local_subscription.status = subscription['status']
-        local_subscription.trial_end = datetime.fromtimestamp(subscription.get('trial_end')) if subscription.get('trial_end') else None
-        local_subscription.current_period_start = datetime.fromtimestamp(subscription['current_period_start'])
-        local_subscription.current_period_end = datetime.fromtimestamp(subscription['current_period_end'])
-        local_subscription.quantity = subscription.get('quantity', 1)
+    """Handle new subscription creation (idempotent upsert)."""
+    try:
+        metadata = subscription.get('metadata', {})
+        team_id = metadata.get('team_id')
+        
+        if not team_id:
+            print(f'Missing team_id in subscription metadata: {subscription.get("id")}')
+            return
+        
+        # Find by team (normal case - created after checkout) or by stripe id
+        local_subscription = TeamSubscription.query.filter_by(
+            team_id=int(team_id), 
+            is_deleted=False
+        ).first()
+        
+        if not local_subscription:
+            # Fallback: try by stripe id (replays, out-of-order)
+            local_subscription = TeamSubscription.query.filter_by(
+                stripe_subscription_id=subscription.get('id')
+            ).first()
+        
+        if not local_subscription:
+            # As a safety net, create a minimal local record from metadata
+            local_subscription = TeamSubscription(
+                team_id=int(team_id),
+                billing_user_id=int(metadata.get('billing_user_id')) if metadata.get('billing_user_id') else None,
+                plan_id=int(metadata.get('plan_id')) if metadata.get('plan_id') else None,
+                price_id=int(metadata.get('price_id')) if metadata.get('price_id') else None,
+            )
+            db.session.add(local_subscription)
+            db.session.flush()
+        
+        # Update fields from Stripe
+        local_subscription.stripe_subscription_id = subscription.get('id')
+        local_subscription.status = subscription.get('status', local_subscription.status)
+        cps = subscription.get('current_period_start')
+        cpe = subscription.get('current_period_end')
+        te = subscription.get('trial_end')
+        local_subscription.current_period_start = datetime.fromtimestamp(cps) if cps else None
+        local_subscription.current_period_end = datetime.fromtimestamp(cpe) if cpe else None
+        local_subscription.trial_end = datetime.fromtimestamp(te) if te else None
+        local_subscription.quantity = subscription.get('quantity', local_subscription.quantity or 1)
         
         db.session.commit()
-        print(f'Subscription created for team {team_id}')
+        print(f'Subscription created/linked for team {team_id}')
+    except Exception as e:
+        db.session.rollback()
+        print(f'ERROR in handle_subscription_created: {e}')
 
 
 def handle_subscription_updated(subscription):
