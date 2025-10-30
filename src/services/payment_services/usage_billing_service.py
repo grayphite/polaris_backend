@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from datetime import datetime, UTC
 
+import os
+import stripe
 from src.extensions import db
 from src.models import Team, TeamSubscription, PaymentPlan, PlanPrice, TeamMember
 
@@ -100,18 +102,52 @@ class UsageBillingService:
     @staticmethod
     def sync_subscription_quantity_with_stripe(team_id: int) -> bool:
         """
-        Idempotently align subscription quantity with current active team members.
-        Stripe API call intentionally omitted for now; only returns whether an update is needed.
+        Idempotently align subscription quantity with current active team members on Stripe.
+        - Excludes team owner from count
+        - Creates proration for the difference (Stripe will bill on next invoice)
+        - Updates local TeamSubscription.quantity to the new value
         """
         team = Team.query.get(team_id)
         subscription = UsageBillingService.get_active_subscription(team_id)
-        if not team or not subscription:
+        if not team or not subscription or not subscription.stripe_subscription_id:
             return False
+
+        # Ensure Stripe key is configured (routes set it normally; add fallback here)
+        if not getattr(stripe, 'api_key', None):
+            stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+
         # Count only members, excluding the team owner
         active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
-        needs_update = subscription.quantity != active_members
-        # Placeholder: when integrated, update Stripe and then local subscription.quantity
-        return needs_update
+        desired_quantity = max(1, active_members)  # Minimum 1 seat
+
+        if subscription.quantity == desired_quantity:
+            return False
+
+        try:
+            # Fetch subscription from Stripe to get item id
+            stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id, expand=['items'])
+            if not stripe_sub or not stripe_sub.get('items') or not stripe_sub['items']['data']:
+                return False
+
+            item_id = stripe_sub['items']['data'][0]['id']
+
+            # Update quantity with proration
+            stripe.Subscription.modify(
+                subscription.stripe_subscription_id,
+                items=[{
+                    'id': item_id,
+                    'quantity': desired_quantity,
+                }],
+                proration_behavior='create_prorations'
+            )
+
+            # Persist locally
+            subscription.quantity = desired_quantity
+            db.session.commit()
+            return True
+        except Exception:
+            db.session.rollback()
+            return False
 
     @staticmethod
     def add_team_member_with_billing_check(team_id: int, user_id: int, added_by: int) -> Dict[str, Any]:
