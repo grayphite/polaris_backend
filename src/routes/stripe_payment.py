@@ -160,6 +160,12 @@ def create_checkout_session(team_id):
     """Create Stripe checkout session for team subscription."""
     data = request.get_json()
     price_id = data.get('price_id')
+    # Resolve trial days: prefer env TRIAL_PERIOD_DAYS, fallback to body, then 7
+    env_trial = os.getenv('TRIAL_PERIOD_DAYS')
+    try:
+        trial_days = int(env_trial) if env_trial is not None else int(data.get('trial_days', 7))
+    except Exception:
+        trial_days = 7
     
     if not price_id:
         return jsonify({'error': 'price_id is required'}), 400
@@ -224,7 +230,8 @@ def create_checkout_session(team_id):
                     'billing_user_id': team_owner.id,
                     'plan_id': price.plan_id,
                     'price_id': price.id
-                }
+                },
+                'trial_period_days': int(trial_days)
             }
         )
         
