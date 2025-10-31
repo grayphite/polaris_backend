@@ -12,6 +12,7 @@ from typing import Dict, Optional, List
 from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.project import Project
+from src.models.team import TeamMember
 
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class ProjectService:
             return ProjectResult(success=False, error=error_msg)
 
     def get_project_by_id(self, project_id: int, user_id: int,
-                         include_deleted: bool = False) -> Optional[Dict]:
+                         include_deleted: bool = False, team_id: Optional[int] = None) -> Optional[Dict]:
         """
         Get a specific project by ID
         
@@ -101,6 +102,14 @@ class ProjectService:
         """
         try:
             query = Project.query.filter_by(id=project_id, created_by=user_id)
+
+            # Optional team filter: ensure project's creator is a member of the team
+            if team_id:
+                member_user_ids = db.session.query(TeamMember.user_id).filter(
+                    TeamMember.team_id == team_id,
+                    TeamMember.is_deleted == False
+                )
+                query = query.filter(Project.created_by.in_(member_user_ids))
             
             if not include_deleted:
                 query = query.filter_by(is_deleted=False)
@@ -115,7 +124,8 @@ class ProjectService:
             return None
 
     def list_projects(self, user_id: int, page: int = 1, per_page: int = 20,
-                     search: str = None, include_deleted: bool = False) -> Dict:
+                     search: str = None, include_deleted: bool = False,
+                     team_id: Optional[int] = None) -> Dict:
         """
         List projects with pagination and search
         
@@ -131,6 +141,14 @@ class ProjectService:
         """
         try:
             query = Project.query.filter_by(created_by=user_id)
+
+            # Optional team filter: only projects whose creator is member of team
+            if team_id:
+                member_user_ids = db.session.query(TeamMember.user_id).filter(
+                    TeamMember.team_id == team_id,
+                    TeamMember.is_deleted == False
+                )
+                query = query.filter(Project.created_by.in_(member_user_ids))
             
             # Filter deleted projects
             if not include_deleted:

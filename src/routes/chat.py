@@ -129,6 +129,7 @@ def list_chats():
     per_page = min(request.args.get('per_page', 10, type=int), 100)
     search = request.args.get('search', '').strip()
     project_id = request.args.get('project_id', type=int)
+    team_id = request.args.get('team_id', type=int)
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
     
     # Fetch from service
@@ -138,7 +139,8 @@ def list_chats():
         page=page,
         per_page=per_page,
         search=search,
-        include_deleted=include_deleted
+        include_deleted=include_deleted,
+        team_id=team_id
     )
     
     logging_service.info(
@@ -151,6 +153,7 @@ def list_chats():
             'per_page': per_page,
             'search': search,
             'project_id': project_id,
+            'team_id': team_id,
             'total_found': result.get('pagination', {}).get('total', 0)
         }
     )
@@ -167,9 +170,12 @@ def get_chat(chat_id):
     current_user = get_current_user()
     
     # Fetch from service
+    team_id = request.args.get('team_id', type=int)
+
     chat = chat_service.get_chat_by_id(
         chat_id=chat_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        team_id=team_id
     )
     
     if not chat:
@@ -180,7 +186,7 @@ def get_chat(chat_id):
         "GET_CHAT",
         f"Chat {chat_id} accessed by user {current_user.id}",
         user_id=current_user.id,
-        metadata={'chat_id': chat_id}
+        metadata={'chat_id': chat_id, 'team_id': team_id}
     )
     
     return jsonify(chat)

@@ -128,6 +128,7 @@ def list_projects():
     per_page = min(request.args.get('per_page', 10, type=int), 100)
     search = request.args.get('search', '').strip()
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+    team_id = request.args.get('team_id', type=int)
     
     # Fetch from service
     result = project_service.list_projects(
@@ -135,7 +136,8 @@ def list_projects():
         page=page,
         per_page=per_page,
         search=search,
-        include_deleted=include_deleted
+        include_deleted=include_deleted,
+        team_id=team_id
     )
     
     logging_service.info(
@@ -147,7 +149,8 @@ def list_projects():
             'page': page,
             'per_page': per_page,
             'search': search,
-            'total_found': result.get('pagination', {}).get('total', 0)
+            'total_found': result.get('pagination', {}).get('total', 0),
+            'team_id': team_id
         }
     )
     
@@ -202,9 +205,12 @@ def get_project(project_id):
     current_user = get_current_user()
     
     # Fetch from service
+    team_id = request.args.get('team_id', type=int)
+
     project = project_service.get_project_by_id(
         project_id=project_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        team_id=team_id
     )
     
     if not project:
@@ -215,7 +221,7 @@ def get_project(project_id):
         "GET_PROJECT",
         f"Project {project_id} accessed by user {current_user.id}",
         user_id=current_user.id,
-        metadata={'project_id': project_id}
+        metadata={'project_id': project_id, 'team_id': team_id}
     )
     
     return jsonify(project)
