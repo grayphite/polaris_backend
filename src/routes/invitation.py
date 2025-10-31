@@ -458,6 +458,94 @@ def resend_invitation(invitation_id):
     return jsonify(result.invitation), 201
 
 
+@invitation_bp.route('/invitations/<int:invitation_id>', methods=['DELETE'])
+@auth_service.require_auth
+@handle_errors
+@log_action(ActionType.DELETE, "invitation")
+def delete_invitation(invitation_id):
+    """Hard delete an invitation by ID"""
+    current_user = get_current_user()
+    
+    # Delete invitation via service (by ID)
+    result = invitation_service.delete_invitation(
+        invitation_id=invitation_id,
+        invited_email=None,
+        user_id=current_user.id
+    )
+    
+    if not result.success:
+        return jsonify({'error': result.error}), 400
+    
+    # Audit log
+    logging_service.audit(
+        user_id=current_user.id,
+        action_type=ActionType.DELETE,
+        resource_type="invitation",
+        resource_id=str(invitation_id),
+        old_values=None,
+        new_values=None,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent'),
+        metadata={'invitation_id': invitation_id, 'action': 'delete'}
+    )
+    
+    logging_service.info(
+        "InvitationRoutes",
+        "DELETE_INVITATION",
+        f"Invitation {invitation_id} deleted by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'invitation_id': invitation_id}
+    )
+    
+    return jsonify({'success': True})
+
+
+@invitation_bp.route('/invitations', methods=['DELETE'])
+@auth_service.require_auth
+@handle_errors
+@log_action(ActionType.DELETE, "invitation")
+def delete_invitation_by_param():
+    """Hard delete an invitation by invitation_id or invited_email"""
+    current_user = get_current_user()
+    
+    data = request.get_json(silent=True) or {}
+    invitation_id = data.get('invitation_id') or request.args.get('invitation_id', type=int)
+    invited_email = data.get('invited_email') or request.args.get('invited_email', type=str)
+    
+    if not invitation_id and not invited_email:
+        return jsonify({'error': 'Either invitation_id or invited_email is required'}), 400
+    
+    result = invitation_service.delete_invitation(
+        invitation_id=invitation_id,
+        invited_email=invited_email,
+        user_id=current_user.id
+    )
+    
+    if not result.success:
+        return jsonify({'error': result.error}), 400
+    
+    logging_service.audit(
+        user_id=current_user.id,
+        action_type=ActionType.DELETE,
+        resource_type="invitation",
+        resource_id=str(invitation_id) if invitation_id else None,
+        old_values=None,
+        new_values=None,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent'),
+        metadata={'invitation_id': invitation_id, 'invited_email': invited_email, 'action': 'delete'}
+    )
+    
+    logging_service.info(
+        "InvitationRoutes",
+        "DELETE_INVITATION_BY_PARAM",
+        f"Invitation deleted by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'invitation_id': invitation_id, 'invited_email': invited_email}
+    )
+    
+    return jsonify({'success': True})
+
 @invitation_bp.route('/invitations/stats', methods=['GET'])
 @auth_service.require_auth
 @handle_errors

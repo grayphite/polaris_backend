@@ -558,6 +558,52 @@ class InvitationService:
             self.logger.error(error_msg)
             return InvitationResult(success=False, error=error_msg)
 
+    def delete_invitation(self, invitation_id: int = None, invited_email: str = None, user_id: int = None) -> InvitationResult:
+        """
+        Hard delete an invitation by id or invited_email (most recent match)
+        
+        Args:
+            invitation_id: ID of the invitation (optional)
+            invited_email: Invited email to match (optional)
+            user_id: ID of the user deleting the invitation
+            
+        Returns:
+            InvitationResult with success status
+        """
+        try:
+            if not invitation_id and not invited_email:
+                return InvitationResult(success=False, error="Either invitation_id or invited_email is required")
+
+            invitation = None
+            if invitation_id:
+                invitation = Invitation.query.filter_by(id=invitation_id).first()
+            elif invited_email:
+                invitation = (
+                    Invitation.query.filter_by(invited_email=invited_email.lower().strip())
+                    .order_by(Invitation.invited_at.desc())
+                    .first()
+                )
+            
+            if not invitation:
+                return InvitationResult(success=False, error="Invitation not found")
+            
+            # Verify user can delete this invitation (same permissions as cancel)
+            if not self._verify_invitation_permission(invitation.team_id, user_id):
+                return InvitationResult(success=False, error="Access denied")
+            
+            # Perform hard delete
+            db.session.delete(invitation)
+            db.session.commit()
+            
+            self.logger.info(f"Invitation deleted (hard): {getattr(invitation, 'id', invitation_id)} by user {user_id}")
+            
+            return InvitationResult(success=True, invitation=None, message="Invitation deleted successfully")
+            
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error deleting invitation: {str(e)}"
+            self.logger.error(error_msg)
+            return InvitationResult(success=False, error=error_msg)
     def resend_invitation(self, invitation_id: int, user_id: int) -> InvitationResult:
         """
         Resend an invitation (create new invitation for same email/team)
