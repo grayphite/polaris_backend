@@ -97,6 +97,8 @@ class PlanPrice(db.Model):
 
     # Stripe linkage
     stripe_price_id = db.Column(db.String(100), nullable=True, unique=True, index=True)
+    # Separate price for per-seat overage item (e.g., 50 BRL per extra member)
+    stripe_overage_price_id = db.Column(db.String(100), nullable=True, index=True)
 
     # Per-seat pricing (optional)
     per_seat_amount_cents = db.Column(db.Integer, nullable=True)  # e.g., 5000 BRL cents per extra member

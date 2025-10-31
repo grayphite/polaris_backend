@@ -102,10 +102,10 @@ class UsageBillingService:
     @staticmethod
     def sync_subscription_quantity_with_stripe(team_id: int) -> bool:
         """
-        Idempotently align subscription quantity with current active team members on Stripe.
-        - Excludes team owner from count
-        - Creates proration for the difference (Stripe will bill on next invoice)
-        - Updates local TeamSubscription.quantity to the new value
+        Align Stripe subscription items with membership counts using a two-item model:
+        - Base item (plan price) remains quantity = 1
+        - Overage item (overage price) quantity = max(0, members_excl_owner - included)
+        Proration is enabled so changes affect the current period.
         """
         team = Team.query.get(team_id)
         subscription = UsageBillingService.get_active_subscription(team_id)
@@ -116,33 +116,54 @@ class UsageBillingService:
         if not getattr(stripe, 'api_key', None):
             stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
-        # Count only members, excluding the team owner
-        active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
-        desired_quantity = max(1, active_members)  # Minimum 1 seat
-
-        if subscription.quantity == desired_quantity:
-            return False
-
         try:
-            # Fetch subscription from Stripe to get item id
+            # Count only members, excluding the team owner
+            active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
+            included = subscription.plan.max_team_members_per_team if subscription.plan.max_team_members_per_team >= 0 else 0
+            overage_qty = max(0, active_members - included)
+
+            # Retrieve subscription with items
             stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id, expand=['items'])
-            if not stripe_sub or not stripe_sub.get('items') or not stripe_sub['items']['data']:
+            items = stripe_sub['items']['data'] if stripe_sub and stripe_sub.get('items') else []
+
+            base_item = None
+            overage_item = None
+            overage_price_id = subscription.price.stripe_overage_price_id if subscription.price else None
+
+            for it in items:
+                if overage_price_id and it['price']['id'] == overage_price_id:
+                    overage_item = it
+                else:
+                    # Assume first non-overage is the base plan item
+                    if base_item is None:
+                        base_item = it
+
+            items_update = []
+
+            # Ensure base item stays at quantity 1
+            if base_item and base_item.get('quantity') != 1:
+                items_update.append({'id': base_item['id'], 'quantity': 1})
+
+            # Update or create overage item
+            if overage_price_id:
+                if overage_item:
+                    if overage_item.get('quantity') != overage_qty:
+                        items_update.append({'id': overage_item['id'], 'quantity': overage_qty})
+                else:
+                    if overage_qty > 0:
+                        items_update.append({'price': overage_price_id, 'quantity': overage_qty})
+
+            if not items_update:
                 return False
 
-            item_id = stripe_sub['items']['data'][0]['id']
-
-            # Update quantity with proration
             stripe.Subscription.modify(
                 subscription.stripe_subscription_id,
-                items=[{
-                    'id': item_id,
-                    'quantity': desired_quantity,
-                }],
+                items=items_update,
                 proration_behavior='create_prorations'
             )
 
-            # Persist locally
-            subscription.quantity = desired_quantity
+            # Persist locally: keep quantity as active_members for reference
+            subscription.quantity = max(1, active_members)
             db.session.commit()
             return True
         except Exception:

@@ -62,9 +62,14 @@ class StripePaymentService:
                 stripe_price_id='price_1SNAuKAIZic08EhhdUtSPQ1r',
                 per_seat_amount_cents=5000,  # 50 BRL per extra team member
                 per_seat_metric='team_member',
+                stripe_overage_price_id='price_1SOEJOAIZic08EhhMj7DdWST',
                 is_active=True
             )
             db.session.add(price)
+        else:
+            # Ensure overage price is populated
+            if not getattr(price, 'stripe_overage_price_id', None):
+                price.stripe_overage_price_id = 'price_1SOEJOAIZic08EhhMj7DdWST'
 
         # Commit the transaction
         db.session.commit()

@@ -7,6 +7,3 @@ __all__ = [
     'StripePaymentService',
     'UsageBillingService',
 ]
-
-
-
