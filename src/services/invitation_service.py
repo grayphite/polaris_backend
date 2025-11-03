@@ -617,6 +617,9 @@ class InvitationService:
                     # Break FK first to avoid constraint issues
                     invited_user = User.query.get(invitation.invited_user_id)
                     if invited_user:
+                        # Remove team memberships to satisfy NOT NULL and FK constraints
+                        TeamMember.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
+                        # Clear reference from invitation before deleting user
                         invitation.invited_user_id = None
                         db.session.flush()
                         # Delete the user record
