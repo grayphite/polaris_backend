@@ -298,7 +298,7 @@ class InvitationService:
                 or_(
                     Invitation.inviter_id == user_id,  # Invitations sent by user
                     Invitation.invited_user_id == user_id,  # Invitations received by user
-                    # Invitations for teams user can manage
+                    # Invitations for teams user can manage (owner/admin)
                     Invitation.team_id.in_(
                         db.session.query(Team.id).join(TeamMember).filter(
                             TeamMember.user_id == user_id,
@@ -338,7 +338,11 @@ class InvitationService:
                         'invitations': [],
                         'pagination': {}
                     }
-                query = query.filter(Invitation.team_id == team_id)
+                # When team_id is provided and user has at least membership, show ALL invitations for that team
+                query = Invitation.query.filter(
+                    Invitation.team_id == team_id,
+                    Invitation.is_deleted == False
+                )
             
             # Filter by status if specified
             if status:
