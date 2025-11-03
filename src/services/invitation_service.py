@@ -609,9 +609,24 @@ class InvitationService:
             if not self._verify_invitation_permission(invitation.team_id, user_id):
                 return InvitationResult(success=False, error="Access denied")
             
-            # Perform hard delete
-            db.session.delete(invitation)
-            db.session.commit()
+            # Business rules:
+            # - For any status (pending, expired, declined/rejected, accepted):
+            #   delete the invited user (if exists) and then delete the invitation
+            try:
+                if invitation.invited_user_id:
+                    # Break FK first to avoid constraint issues
+                    invited_user = User.query.get(invitation.invited_user_id)
+                    if invited_user:
+                        invitation.invited_user_id = None
+                        db.session.flush()
+                        # Delete the user record
+                        db.session.delete(invited_user)
+                # Delete invitation
+                db.session.delete(invitation)
+                db.session.commit()
+            except Exception as inner_e:
+                db.session.rollback()
+                return InvitationResult(success=False, error=f"Error deleting invitation/user: {str(inner_e)}")
             
             self.logger.info(f"Invitation deleted (hard): {getattr(invitation, 'id', invitation_id)} by user {user_id}")
             
