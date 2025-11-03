@@ -16,6 +16,13 @@ from src.extensions import db
 from src.models.invitation import Invitation
 from src.models.team import Team, TeamMember
 from src.models.user import User
+from src.models.audit_log import AuditLog
+from src.models.chat import Chat
+from src.models.project import Project
+from src.models.ai_chat import AIChat
+from src.models.documents import DocumentoUpload
+from src.models.documento_gerado import DocumentoGerado
+from src.models.cliente import Cliente
 from src.services.team_service import team_service
 from src.services.email_service import email_service
 from src.services.payment_services.usage_billing_service import UsageBillingService
@@ -589,9 +596,11 @@ class InvitationService:
             InvitationResult with success status
         """
         try:
+            # Step 0: Validate input
             if not invitation_id and not invited_email:
                 return InvitationResult(success=False, error="Either invitation_id or invited_email is required")
 
+            # Step 1: Resolve invitation by id or by most recent email match
             invitation = None
             if invitation_id:
                 invitation = Invitation.query.filter_by(id=invitation_id).first()
@@ -605,27 +614,57 @@ class InvitationService:
             if not invitation:
                 return InvitationResult(success=False, error="Invitation not found")
             
-            # Verify user can delete this invitation (same permissions as cancel)
+            # Step 2: Permission check (same policy as cancel)
             if not self._verify_invitation_permission(invitation.team_id, user_id):
                 return InvitationResult(success=False, error="Access denied")
             
-            # Business rules:
-            # - For any status (pending, expired, declined/rejected, accepted):
-            #   delete the invited user (if exists) and then delete the invitation
+            # Step 3: Apply deletion policy
+            # For any invitation status (pending/expired/declined/accepted):
+            #   3.1 If an invited user exists -> detach dependent rows and delete the user
+            #   3.2 Always delete the invitation
             try:
                 if invitation.invited_user_id:
-                    # Break FK first to avoid constraint issues
+                    # 3.1 Load invited user
                     invited_user = User.query.get(invitation.invited_user_id)
                     if invited_user:
-                        # Remove team memberships to satisfy NOT NULL and FK constraints
+                        # 3.1.a Guard: do not auto-delete users who own one or more active teams
+                        owns_teams = Team.query.filter_by(created_by=invited_user.id, is_deleted=False).count() > 0
+                        if owns_teams:
+                            return InvitationResult(success=False, error="Cannot auto-delete user: user owns one or more teams")
+
+                        # 3.1.b Remove team memberships to satisfy NOT NULL / FK constraints
                         TeamMember.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
-                        # Clear reference from invitation before deleting user
+
+                        # 3.1.c Detach audit logs (break FK to users)
+                        db.session.query(AuditLog).filter(AuditLog.user_id == invited_user.id).update({AuditLog.user_id: None}, synchronize_session=False)
+
+                        # 3.1.d AI data: clear deleted_by refs, then delete AIChat rows created by user
+                        db.session.query(AIChat).filter(AIChat.deleted_by == invited_user.id).update({AIChat.deleted_by: None}, synchronize_session=False)
+                        AIChat.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
+
+                        # 3.1.e Chats/Projects created by this user (cascades to AIChat via relationships)
+                        Chat.query.filter_by(created_by=invited_user.id).delete(synchronize_session=False)
+                        Project.query.filter_by(created_by=invited_user.id).delete(synchronize_session=False)
+
+                        # 3.1.f Documents: clear reviewer refs; delete generated docs by this user; keep uploads but null user_id
+                        db.session.query(DocumentoGerado).filter(DocumentoGerado.revisado_por == invited_user.id).update({DocumentoGerado.revisado_por: None}, synchronize_session=False)
+                        DocumentoGerado.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
+                        db.session.query(DocumentoUpload).filter(DocumentoUpload.user_id == invited_user.id).update({DocumentoUpload.user_id: None}, synchronize_session=False)
+
+                        # 3.1.g Clients: delete generated docs tied to those clients, then delete client rows
+                        cliente_ids = [c.id for c in Cliente.query.filter_by(user_id=invited_user.id).all()]
+                        if cliente_ids:
+                            DocumentoGerado.query.filter(DocumentoGerado.cliente_id.in_(cliente_ids)).delete(synchronize_session=False)
+                            Cliente.query.filter(Cliente.id.in_(cliente_ids)).delete(synchronize_session=False)
+
+                        # 3.1.h Clear invitation's invited_user_id and delete the user
                         invitation.invited_user_id = None
                         db.session.flush()
-                        # Delete the user record
                         db.session.delete(invited_user)
-                # Delete invitation
+
+                # 3.2 Delete invitation
                 db.session.delete(invitation)
+                # 3.3 Commit transaction
                 db.session.commit()
             except Exception as inner_e:
                 db.session.rollback()
