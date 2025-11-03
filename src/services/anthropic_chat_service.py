@@ -86,6 +86,21 @@ class AnthropicChatService:
         self.anthropic_version = "2023-06-01"  # Latest stable version
         self.anthropic_beta = "files-api-2025-04-14"  # Latest beta features
 
+    def _format_anthropic_error(self, status_code: int, raw_text: str) -> str:
+        """Return a user-friendly error message for known Anthropic errors."""
+        try:
+            data = json.loads(raw_text)
+            msg = data.get('error', {}).get('message') or data.get('message') or raw_text
+        except Exception:
+            msg = raw_text
+
+        # Known file constraints
+        if isinstance(msg, str) and 'A maximum of 100 PDF pages may be provided' in msg:
+            return "Anthropic error: PDF exceeds 100 pages. Please split the PDF into chunks of 100 pages or fewer and try again."
+
+        # Default: pass through Anthropic message
+        return f"Anthropic API error ({status_code}): {msg}"
+
     def _ensure_initialized(self):
         """Lazy initialization of Anthropic client"""
         if self._initialized:
@@ -1382,13 +1397,13 @@ Name:"""
             )
             
             if response.status_code != 200:
-                error_msg = f"Anthropic API error: {response.status_code} - {response.text}"
-                self.logger.error(error_msg)
+                friendly = self._format_anthropic_error(response.status_code, response.text)
+                self.logger.error(friendly)
                 yield {
                     "type": "error",
                     "error": {
                         "type": "api_error",
-                        "message": error_msg,
+                        "message": friendly,
                         "status_code": response.status_code
                     }
                 }
@@ -1617,11 +1632,11 @@ Name:"""
                     response_time_ms=response_time_ms
                 )
             else:
-                error_msg = f"Anthropic API error: {response.status_code} - {response.text}"
-                self.logger.error(error_msg)
+                friendly = self._format_anthropic_error(response.status_code, response.text)
+                self.logger.error(friendly)
                 return AnthropicResponse(
                     success=False,
-                    error=error_msg,
+                    error=friendly,
                     response_time_ms=response_time_ms
                 )
             
