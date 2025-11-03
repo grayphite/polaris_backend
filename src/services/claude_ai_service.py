@@ -49,7 +49,12 @@ class ClaudeAIService:
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.model = "claude-3-haiku-20240307"
-        self.max_tokens = 1000
+        # Derive max output tokens from env and clamp to Claude limits
+        try:
+            env_max_out = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8192'))
+        except Exception:
+            env_max_out = 8192
+        self.max_tokens = max(1, min(env_max_out, 8192))
         self.logger = logging.getLogger(self.__class__.__name__)
 
         if not self.api_key:

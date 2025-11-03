@@ -259,6 +259,29 @@ class TeamService:
             )
             
             teams = [team.to_summary_dict() for team in pagination.items]
+
+            # Enrich with owner info (who created the team)
+            try:
+                owner_ids = list({t.created_by for t in pagination.items})
+                if owner_ids:
+                    owners = User.query.filter(User.id.in_(owner_ids)).all()
+                    owner_map = {u.id: u for u in owners}
+                    for t in teams:
+                        owner = owner_map.get(t.get('created_by'))
+                        if owner:
+                            t['owner'] = {
+                                'id': owner.id,
+                                'email': owner.email,
+                                'username': owner.username,
+                                'first_name': owner.first_name,
+                                'last_name': owner.last_name,
+                            }
+                        else:
+                            t['owner'] = None
+            except Exception:
+                # Do not block response if enrichment fails
+                for t in teams:
+                    t.setdefault('owner', None)
             
             return {
                 'success': True,

@@ -53,7 +53,13 @@ class AnthropicChatService:
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.model = "claude-sonnet-4-5-20250929"
-        self.max_tokens = 2000
+        # Derive max output tokens from env and clamp to Claude limits
+        try:
+            env_max_out = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8192'))
+        except Exception:
+            env_max_out = 8192
+        # Claude Sonnet 4.5 per-call output cap is typically 8192
+        self.max_tokens = max(1, min(env_max_out, 8192))
         self._initialized = False
 
         # Streaming configuration (aligned with Anthropic production model)

@@ -316,8 +316,22 @@ class InvitationService:
             
             # Filter by team if specified
             if team_id:
-                # Verify user has access to this team
-                if not self._verify_invitation_permission(team_id, user_id):
+                # Relaxed access: allow if user is owner OR a member of the team (not only admins)
+                team = Team.query.filter_by(id=team_id, is_deleted=False).first()
+                if not team:
+                    return {
+                        'success': False,
+                        'error': 'Team not found',
+                        'invitations': [],
+                        'pagination': {}
+                    }
+                is_owner = team.created_by == user_id
+                is_member = TeamMember.query.filter_by(
+                    team_id=team_id,
+                    user_id=user_id,
+                    is_deleted=False
+                ).first() is not None
+                if not (is_owner or is_member):
                     return {
                         'success': False,
                         'error': 'Access denied to team invitations',
