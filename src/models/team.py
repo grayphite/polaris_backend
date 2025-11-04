@@ -171,3 +171,4 @@ class TeamMember(db.Model):
         return self.role in ['owner', 'admin'] or self.has_permission('remove_members')
 
 
+

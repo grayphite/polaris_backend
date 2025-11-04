@@ -458,3 +458,180 @@ def health_check():
             'error': str(e)
         }), 500
 
+
+# -------- Project Members Endpoints --------
+
+@project_bp.route('/projects/<int:project_id>/members', methods=['GET'])
+@auth_service.require_auth
+@handle_errors
+@log_action(ActionType.READ, "project_members")
+def list_project_members(project_id):
+    """List members of a project
+    
+    Query parameters:
+    - page: Page number (default: 1)
+    - per_page: Items per page (default: 10, max: 100)
+    
+    Authorization: Bearer token (must be project owner or member)
+    """
+    current_user = get_current_user()
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 10, type=int), 100)
+
+    result = project_service.list_project_members(
+        project_id=project_id,
+        user_id=current_user.id,
+        page=page,
+        per_page=per_page
+    )
+
+    logging_service.info(
+        "ProjectRoutes",
+        "GET_PROJECT_MEMBERS",
+        f"Project members for project {project_id} accessed by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'project_id': project_id, 'total_found': result.get('pagination', {}).get('total', 0)}
+    )
+
+    return jsonify(result)
+
+
+@project_bp.route('/projects/<int:project_id>/members', methods=['POST'])
+@auth_service.require_auth
+@validate_request_data(required_fields=['user_id'], optional_fields=['role'])
+@handle_errors
+@log_action(ActionType.CREATE, "project_member")
+def add_project_member(project_id):
+    """Add a member to a project
+    
+    Request body (JSON):
+    - user_id: integer (required)
+    - role: "member" or "admin" (default: "member")
+    
+    Authorization: Bearer token (project owner or admin)
+    """
+    current_user = get_current_user()
+    data = request.validated_data
+
+    result = project_service.add_project_member(
+        project_id=project_id,
+        user_id=current_user.id,
+        member_user_id=data['user_id'],
+        role=data.get('role', 'member')
+    )
+
+    if not result.success:
+        return jsonify({'error': result.error}), 400
+
+    logging_service.audit(
+        user_id=current_user.id,
+        action_type=ActionType.CREATE,
+        resource_type="project_member",
+        resource_id=str(result.project.get('id')),
+        new_values=result.project,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent'),
+        metadata={'project_id': project_id, 'member_user_id': data['user_id'], 'role': data.get('role', 'member')}
+    )
+
+    logging_service.info(
+        "ProjectRoutes",
+        "ADD_PROJECT_MEMBER",
+        f"Member added to project {project_id} by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'project_id': project_id, 'member_user_id': data['user_id']}
+    )
+
+    return jsonify(result.project), 201
+
+
+@project_bp.route('/projects/<int:project_id>/members/<int:member_user_id>', methods=['DELETE'])
+@auth_service.require_auth
+@handle_errors
+@log_action(ActionType.DELETE, "project_member")
+def remove_project_member(project_id, member_user_id):
+    """Remove a member from a project
+    
+    Path params:
+    - member_user_id: integer (user id to remove)
+    
+    Authorization: Bearer token (project owner or admin)
+    """
+    current_user = get_current_user()
+
+    result = project_service.remove_project_member(
+        project_id=project_id,
+        user_id=current_user.id,
+        member_user_id=member_user_id
+    )
+
+    if not result.success:
+        return jsonify({'error': result.error}), 400
+
+    logging_service.audit(
+        user_id=current_user.id,
+        action_type=ActionType.DELETE,
+        resource_type="project_member",
+        resource_id=f"{project_id}_{member_user_id}",
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent'),
+        metadata={'project_id': project_id, 'member_user_id': member_user_id}
+    )
+
+    logging_service.info(
+        "ProjectRoutes",
+        "REMOVE_PROJECT_MEMBER",
+        f"Member removed from project {project_id} by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'project_id': project_id, 'member_user_id': member_user_id}
+    )
+
+    return jsonify({'message': 'Member removed successfully'})
+
+
+@project_bp.route('/projects/<int:project_id>/members/<int:member_user_id>/role', methods=['PUT'])
+@auth_service.require_auth
+@validate_request_data(required_fields=['role'])
+@handle_errors
+@log_action(ActionType.UPDATE, "project_member_role")
+def update_project_member_role(project_id, member_user_id):
+    """Update a project member's role
+    
+    Request body (JSON):
+    - role: "member" or "admin" (required)
+    
+    Authorization: Bearer token (project owner or admin)
+    """
+    current_user = get_current_user()
+    data = request.validated_data
+
+    result = project_service.update_project_member_role(
+        project_id=project_id,
+        user_id=current_user.id,
+        member_user_id=member_user_id,
+        new_role=data['role']
+    )
+
+    if not result.success:
+        return jsonify({'error': result.error}), 400
+
+    logging_service.audit(
+        user_id=current_user.id,
+        action_type=ActionType.UPDATE,
+        resource_type="project_member_role",
+        resource_id=f"{project_id}_{member_user_id}",
+        new_values={'role': data['role']},
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent'),
+        metadata={'project_id': project_id, 'member_user_id': member_user_id, 'new_role': data['role']}
+    )
+
+    logging_service.info(
+        "ProjectRoutes",
+        "UPDATE_PROJECT_MEMBER_ROLE",
+        f"Member role updated in project {project_id} by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={'project_id': project_id, 'member_user_id': member_user_id, 'new_role': data['role']}
+    )
+
+    return jsonify(result.project)

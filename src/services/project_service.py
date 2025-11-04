@@ -11,7 +11,8 @@ from typing import Dict, Optional, List
 
 from sqlalchemy import or_, and_
 from src.extensions import db
-from src.models.project import Project
+from src.models.project import Project, ProjectMember
+from src.models.user import User
 from src.models.team import TeamMember
 
 
@@ -71,6 +72,17 @@ class ProjectService:
             )
             
             db.session.add(project)
+            db.session.flush()
+
+            # Add creator as project owner member for parity with teams
+            owner_member = ProjectMember(
+                project_id=project.id,
+                user_id=user_id,
+                role='owner',
+                added_by=user_id,
+                is_deleted=False
+            )
+            db.session.add(owner_member)
             db.session.commit()
             
             self.logger.info(f"Project created: {project.id} by user {user_id}")
@@ -84,6 +96,136 @@ class ProjectService:
         except Exception as e:
             db.session.rollback()
             error_msg = f"Error creating project: {str(e)}"
+            self.logger.error(error_msg)
+            return ProjectResult(success=False, error=error_msg)
+
+    # -------- Project membership management --------
+
+    def _verify_project_management_access(self, project_id: int, user_id: int) -> bool:
+        project = Project.query.filter_by(id=project_id, is_deleted=False).first()
+        if not project:
+            return False
+        if project.created_by == user_id:
+            return True
+        member = project.get_member_by_user_id(user_id)
+        return bool(member and member.can_manage_project())
+
+    def add_project_member(self, project_id: int, user_id: int, member_user_id: int, role: str = 'member') -> ProjectResult:
+        try:
+            # Only project owner can add members
+            project = Project.query.filter_by(id=project_id, is_deleted=False).first()
+            if not project:
+                return ProjectResult(success=False, error="Project not found")
+            if project.created_by != user_id:
+                return ProjectResult(success=False, error="Only project owner can add members")
+
+            member_user = User.query.get(member_user_id)
+            if not member_user:
+                return ProjectResult(success=False, error="User not found")
+
+            existing = ProjectMember.query.filter_by(project_id=project_id, user_id=member_user_id, is_deleted=False).first()
+            if existing:
+                return ProjectResult(success=False, error="User is already a member of this project")
+
+            proj_member = ProjectMember(
+                project_id=project_id,
+                user_id=member_user_id,
+                role=role,
+                added_by=user_id,
+                is_deleted=False
+            )
+            db.session.add(proj_member)
+            db.session.commit()
+
+            return ProjectResult(success=True, project=proj_member.to_dict(), message="Member added successfully")
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error adding project member: {str(e)}"
+            self.logger.error(error_msg)
+            return ProjectResult(success=False, error=error_msg)
+
+    def remove_project_member(self, project_id: int, user_id: int, member_user_id: int) -> ProjectResult:
+        try:
+            if not self._verify_project_management_access(project_id, user_id):
+                return ProjectResult(success=False, error="Access denied")
+
+            project = Project.query.get(project_id)
+            if not project:
+                return ProjectResult(success=False, error="Project not found")
+
+            # Prevent removing project owner
+            if project.created_by == member_user_id:
+                return ProjectResult(success=False, error="Cannot remove project owner")
+
+            member = ProjectMember.query.filter_by(project_id=project_id, user_id=member_user_id, is_deleted=False).first()
+            if not member:
+                return ProjectResult(success=False, error="Member not found")
+
+            member.is_deleted = True
+            member.left_at = datetime.now(UTC)
+            member.removed_by = user_id
+            member.updated_at = datetime.now(UTC)
+            db.session.commit()
+            return ProjectResult(success=True, message="Member removed successfully")
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error removing project member: {str(e)}"
+            self.logger.error(error_msg)
+            return ProjectResult(success=False, error=error_msg)
+
+    def list_project_members(self, project_id: int, user_id: int, page: int = 1, per_page: int = 20) -> Dict:
+        try:
+            project = Project.query.filter_by(id=project_id, is_deleted=False).first()
+            if not project:
+                return {'success': False, 'error': 'Project not found', 'members': [], 'pagination': {}}
+
+            # Require at least membership or ownership to view
+            if not (project.created_by == user_id or project.is_member(user_id)):
+                return {'success': False, 'error': 'Access denied', 'members': [], 'pagination': {}}
+
+            query = ProjectMember.query.filter_by(project_id=project_id, is_deleted=False).order_by(ProjectMember.joined_at.asc())
+            pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+            members = [m.to_summary_dict() for m in pagination.items]
+            return {
+                'success': True,
+                'members': members,
+                'pagination': {
+                    'total': pagination.total,
+                    'pages': pagination.pages,
+                    'current_page': page,
+                    'per_page': per_page,
+                    'has_next': pagination.has_next,
+                    'has_prev': pagination.has_prev
+                }
+            }
+        except Exception as e:
+            error_msg = f"Error listing project members: {str(e)}"
+            self.logger.error(error_msg)
+            return {'success': False, 'error': error_msg, 'members': [], 'pagination': {}}
+
+    def update_project_member_role(self, project_id: int, user_id: int, member_user_id: int, new_role: str) -> ProjectResult:
+        try:
+            if not self._verify_project_management_access(project_id, user_id):
+                return ProjectResult(success=False, error="Access denied")
+
+            project = Project.query.get(project_id)
+            if not project:
+                return ProjectResult(success=False, error="Project not found")
+
+            if project.created_by == member_user_id:
+                return ProjectResult(success=False, error="Cannot change project owner's role")
+
+            member = ProjectMember.query.filter_by(project_id=project_id, user_id=member_user_id, is_deleted=False).first()
+            if not member:
+                return ProjectResult(success=False, error="Member not found")
+
+            member.role = new_role
+            member.updated_at = datetime.now(UTC)
+            db.session.commit()
+            return ProjectResult(success=True, project=member.to_dict(), message="Member role updated successfully")
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error updating project member role: {str(e)}"
             self.logger.error(error_msg)
             return ProjectResult(success=False, error=error_msg)
 
