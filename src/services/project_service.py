@@ -186,6 +186,34 @@ class ProjectService:
             query = ProjectMember.query.filter_by(project_id=project_id, is_deleted=False).order_by(ProjectMember.joined_at.asc())
             pagination = query.paginate(page=page, per_page=per_page, error_out=False)
             members = [m.to_summary_dict() for m in pagination.items]
+            
+            # Enrich with user information (name and email)
+            try:
+                user_ids = [m.get('user_id') for m in members if m.get('user_id')]
+                if user_ids:
+                    users = User.query.filter(User.id.in_(user_ids)).all()
+                    user_map = {u.id: u for u in users}
+                    for member in members:
+                        user_id = member.get('user_id')
+                        if user_id:
+                            user = user_map.get(user_id)
+                            if user:
+                                member['user'] = {
+                                    'id': user.id,
+                                    'email': user.email,
+                                    'username': user.username,
+                                    'first_name': user.first_name,
+                                    'last_name': user.last_name,
+                                }
+                            else:
+                                member['user'] = None
+                        else:
+                            member['user'] = None
+            except Exception:
+                # Do not block response if enrichment fails
+                for member in members:
+                    member.setdefault('user', None)
+            
             return {
                 'success': True,
                 'members': members,
