@@ -271,26 +271,59 @@ class ProjectService:
         """
         List projects with pagination and search
         
+        Filtering logic based on user role:
+        - If user role is "owner": return all projects created by the user
+        - If user role is "member": return all projects where user is a member (via ProjectMember table)
+        
         Args:
             user_id: ID of the requesting user
             page: Page number (1-indexed)
             per_page: Items per page
             search: Optional search query
             include_deleted: Whether to include soft-deleted projects
+            team_id: Optional team filter
             
         Returns:
             Dictionary with projects list and pagination metadata
         """
         try:
-            query = Project.query.filter_by(created_by=user_id)
-
-            # Optional team filter: only projects whose creator is member of team
-            if team_id:
-                member_user_ids = db.session.query(TeamMember.user_id).filter(
-                    TeamMember.team_id == team_id,
-                    TeamMember.is_deleted == False
-                )
-                query = query.filter(Project.created_by.in_(member_user_ids))
+            # Get user to check their role
+            user = User.query.get(user_id)
+            if not user:
+                return {
+                    'success': False,
+                    'error': 'User not found',
+                    'projects': [],
+                    'pagination': {}
+                }
+            
+            # Build query based on user role
+            if user.role == 'owner':
+                # Owner: return all projects created by the user
+                query = Project.query.filter_by(created_by=user_id)
+                
+                # Optional team filter: only projects whose creator is member of team
+                if team_id:
+                    member_user_ids = db.session.query(TeamMember.user_id).filter(
+                        TeamMember.team_id == team_id,
+                        TeamMember.is_deleted == False
+                    )
+                    query = query.filter(Project.created_by.in_(member_user_ids))
+            else:
+                # Member: return all projects where user is a member (via ProjectMember table)
+                query = Project.query.join(ProjectMember).filter(
+                    ProjectMember.user_id == user_id,
+                    ProjectMember.is_deleted == False
+                ).distinct()
+                
+                # Optional team filter: only projects in teams where the user is a member
+                if team_id:
+                    # Get projects where user is a member AND project's creator is in the team
+                    member_user_ids = db.session.query(TeamMember.user_id).filter(
+                        TeamMember.team_id == team_id,
+                        TeamMember.is_deleted == False
+                    )
+                    query = query.filter(Project.created_by.in_(member_user_ids))
             
             # Filter deleted projects
             if not include_deleted:
