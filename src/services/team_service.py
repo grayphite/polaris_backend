@@ -151,9 +151,29 @@ class TeamService:
             
             self.logger.info(f"Team created: {team.id} by user {user_id}")
             
+            # Format team response same as list_teams (with owner info)
+            team_dict = team.to_summary_dict()
+            
+            # Enrich with owner info (who created the team)
+            try:
+                owner = User.query.get(team.created_by)
+                if owner:
+                    team_dict['owner'] = {
+                        'id': owner.id,
+                        'email': owner.email,
+                        'username': owner.username,
+                        'first_name': owner.first_name,
+                        'last_name': owner.last_name,
+                    }
+                else:
+                    team_dict['owner'] = None
+            except Exception:
+                # Do not block response if enrichment fails
+                team_dict['owner'] = None
+            
             return TeamResult(
                 success=True,
-                team=team.to_dict(),
+                team=team_dict,
                 message="Team created successfully"
             )
             
