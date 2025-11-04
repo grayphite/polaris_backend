@@ -3,6 +3,8 @@ from flask import Blueprint, jsonify, request, g
 from src.extensions import db
 from src.models.user import User
 from src.services.auth_service import auth_service
+from src.services.user_service import user_service
+from src.services.team_service import team_service
 from src.models import TeamSubscription
 
 user_bp = Blueprint('user', __name__)
@@ -66,7 +68,6 @@ def register_user():
         # If invitation token provided, process invitation acceptance
         if invitation_token and invitation:
             try:
-                from src.services.team_service import team_service
                 from src.services.payment_services.usage_billing_service import UsageBillingService
                 
                 # Accept invitation (update status)
@@ -151,12 +152,16 @@ def register_user():
         except Exception:
             ts_obj = []
 
+        # Fetch teams data via user service
+        teams_data = user_service.get_user_teams(result.user['id'])
+
         return jsonify({
             'success': True,
             'message': 'Usuário criado com sucesso',
             'user': result.user,
             'token': result.token,
-            'team_subscriptions': ts_obj
+            'team_subscriptions': ts_obj,
+            'teams': teams_data
         }), 201
 
     except Exception as e:
@@ -225,12 +230,16 @@ def login_user():
             except Exception:
                 ts_obj = []
 
+            # Fetch teams data via user service
+            teams_data = user_service.get_user_teams(result.user['id'])
+
             return jsonify({
                 'success': True,
                 'message': 'Login realizado com sucesso',
                 'user': result.user,
                 'token': result.token,
-                'team_subscriptions': ts_obj
+                'team_subscriptions': ts_obj,
+                'teams': teams_data
             }), 200
         else:
             return jsonify({'error': result.error}), 401
