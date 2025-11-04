@@ -517,7 +517,7 @@ def add_project_member(project_id):
         project_id=project_id,
         user_id=current_user.id,
         member_user_id=data['user_id'],
-        role=data.get('role', 'member')
+        role=data.get('role', 'viewer')
     )
 
     if not result.success:

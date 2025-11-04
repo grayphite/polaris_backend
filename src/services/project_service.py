@@ -110,7 +110,7 @@ class ProjectService:
         member = project.get_member_by_user_id(user_id)
         return bool(member and member.can_manage_project())
 
-    def add_project_member(self, project_id: int, user_id: int, member_user_id: int, role: str = 'member') -> ProjectResult:
+    def add_project_member(self, project_id: int, user_id: int, member_user_id: int, role: str = 'viewer') -> ProjectResult:
         try:
             # Only project owner can add members
             project = Project.query.filter_by(id=project_id, is_deleted=False).first()

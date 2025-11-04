@@ -92,7 +92,7 @@ class ProjectMember(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
 
     # Member role and permissions
-    role = db.Column(db.String(50), nullable=False, default='member')  # owner, admin, member
+    role = db.Column(db.String(50), nullable=False, default='viewer')  # owner, editor, viewer
     permissions = db.Column(db.JSON, nullable=True)  # Additional permissions as JSON
 
     # Timestamps
@@ -151,5 +151,14 @@ class ProjectMember(db.Model):
         return permission in self.permissions
 
     def can_manage_project(self) -> bool:
-        return self.role in ['owner', 'admin']
+        """Check if member can manage project (owner or editor)"""
+        return self.role in ['owner', 'editor']
+
+    def can_edit(self) -> bool:
+        """Check if member can edit project content"""
+        return self.role in ['owner', 'editor']
+
+    def can_view(self) -> bool:
+        """Check if member can view project"""
+        return self.role in ['owner', 'editor', 'viewer']
 
