@@ -123,21 +123,36 @@ class ProjectService:
             if not member_user:
                 return ProjectResult(success=False, error="User not found")
 
-            existing = ProjectMember.query.filter_by(project_id=project_id, user_id=member_user_id, is_deleted=False).first()
+            # Check for existing member (including soft-deleted ones due to unique constraint)
+            existing = ProjectMember.query.filter_by(project_id=project_id, user_id=member_user_id).first()
+            
             if existing:
-                return ProjectResult(success=False, error="User is already a member of this project")
-
-            proj_member = ProjectMember(
-                project_id=project_id,
-                user_id=member_user_id,
-                role=role,
-                added_by=user_id,
-                is_deleted=False
-            )
-            db.session.add(proj_member)
-            db.session.commit()
-
-            return ProjectResult(success=True, project=proj_member.to_dict(), message="Member added successfully")
+                if not existing.is_deleted:
+                    # Member is already active
+                    return ProjectResult(success=False, error="User is already a member of this project")
+                else:
+                    # Member was previously removed, reactivate them
+                    existing.is_deleted = False
+                    existing.role = role
+                    existing.left_at = None
+                    existing.removed_by = None
+                    existing.added_by = user_id
+                    existing.joined_at = datetime.now(UTC)  # Update joined_at to reflect re-joining
+                    existing.updated_at = datetime.now(UTC)
+                    db.session.commit()
+                    return ProjectResult(success=True, project=existing.to_dict(), message="Member re-added successfully")
+            else:
+                # Create new member
+                proj_member = ProjectMember(
+                    project_id=project_id,
+                    user_id=member_user_id,
+                    role=role,
+                    added_by=user_id,
+                    is_deleted=False
+                )
+                db.session.add(proj_member)
+                db.session.commit()
+                return ProjectResult(success=True, project=proj_member.to_dict(), message="Member added successfully")
         except Exception as e:
             db.session.rollback()
             error_msg = f"Error adding project member: {str(e)}"
