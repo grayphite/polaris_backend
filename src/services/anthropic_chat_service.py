@@ -809,8 +809,8 @@ class AnthropicChatService:
                     'pagination': {}
                 }
             
-            # Start with AI chats for the specific chat
-            query = AIChat.query.filter_by(chat_id=chat_id, user_id=user_id)
+            # Start with AI chats for the specific chat (for all users). Access already verified above.
+            query = AIChat.query.filter_by(chat_id=chat_id)
             
             # Filter deleted AI chats
             if not include_deleted:
