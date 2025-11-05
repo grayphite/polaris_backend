@@ -17,6 +17,7 @@ from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.ai_chat import AIChat, AIStats
 from src.models.chat import Chat
+from src.models.project import ProjectMember
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -111,8 +112,15 @@ class OpenAIChatService:
         if not chat:
             return False
         
-        # Allow access if user owns the chat OR if the parent project is public
-        return chat.created_by == user_id or chat.project.is_public
+        # Allow access if user owns the chat, is an active member of the parent project, or project is public
+        if chat.created_by == user_id or chat.project.is_public:
+            return True
+        is_member = ProjectMember.query.filter_by(
+            project_id=chat.project_id,
+            user_id=user_id,
+            is_deleted=False
+        ).first() is not None
+        return is_member
 
     def _touch_chat(self, chat_id: int):
         """

@@ -13,7 +13,7 @@ from typing import Dict, Optional, List
 from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.chat import Chat
-from src.models.project import Project
+from src.models.project import Project, ProjectMember
 from src.models.team import TeamMember
 
 
@@ -68,8 +68,15 @@ class ChatService:
         if not project:
             return False
         
-        # Allow access if user owns the project OR if project is public
-        return project.created_by == user_id or project.is_public
+        # Allow access if user owns the project, is an active project member, or project is public
+        if project.created_by == user_id or project.is_public:
+            return True
+        is_member = ProjectMember.query.filter_by(
+            project_id=project_id,
+            user_id=user_id,
+            is_deleted=False
+        ).first() is not None
+        return is_member
 
     def create_chat(self, name: str, project_id: int, user_id: int,
                    description: Optional[str] = None) -> ChatResult:
@@ -200,11 +207,16 @@ class ChatService:
             Dictionary with chats list and pagination metadata
         """
         try:
-            # Start with chats from user's projects OR public projects
+            # Start with chats from user's own projects, projects where user is a member, OR public projects
+            member_project_ids = db.session.query(ProjectMember.project_id).filter(
+                ProjectMember.user_id == user_id,
+                ProjectMember.is_deleted == False
+            )
             query = Chat.query.join(Project).filter(
                 or_(
-                    Project.created_by == user_id,  # User's own projects
-                    Project.is_public == True        # Public projects
+                    Project.created_by == user_id,
+                    Project.id.in_(member_project_ids),
+                    Project.is_public == True
                 )
             )
             
