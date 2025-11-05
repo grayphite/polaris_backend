@@ -286,22 +286,37 @@ class ProjectService:
             Project dictionary or None if not found
         """
         try:
-            query = Project.query.filter_by(id=project_id, created_by=user_id)
+            # Base project lookup by ID (optionally exclude deleted)
+            base_query = Project.query.filter_by(id=project_id)
+            if not include_deleted:
+                base_query = base_query.filter_by(is_deleted=False)
 
-            # Optional team filter: ensure project's creator is a member of the team
+            project = base_query.first()
+            if not project:
+                return None
+
+            # Authorization: owner or active project member can view
+            is_owner = project.created_by == user_id
+            is_active_member = ProjectMember.query.filter_by(
+                project_id=project_id,
+                user_id=user_id,
+                is_deleted=False
+            ).first() is not None
+
+            if not (is_owner or is_active_member):
+                return None
+
+            # Optional team filter: ensure project's creator is a member of the provided team
             if team_id:
                 member_user_ids = db.session.query(TeamMember.user_id).filter(
                     TeamMember.team_id == team_id,
                     TeamMember.is_deleted == False
                 )
-                query = query.filter(Project.created_by.in_(member_user_ids))
+                if project.created_by not in [uid for (uid,) in member_user_ids]:
+                    # If creator is not in the team, deny access under this filter
+                    return None
             
-            if not include_deleted:
-                query = query.filter_by(is_deleted=False)
-            
-            project = query.first()
-            
-            return project.to_dict() if project else None
+            return project.to_dict()
             
         except Exception as e:
             error_msg = f"Error fetching project: {str(e)}"
