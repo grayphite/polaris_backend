@@ -111,6 +111,29 @@ def get_team_subscription(team_id):
     })
 
 
+@bp.route('/subscriptions/<int:team_id>/upcoming-invoice', methods=['GET'])
+def get_upcoming_invoice(team_id):
+    """Get the upcoming invoice for a team's subscription."""
+    try:
+        result = StripePaymentService.get_upcoming_invoice_for_team(team_id)
+        return jsonify({
+            'upcoming_invoice': result['invoice_data']
+        })
+    except ValueError as e:
+        # Handle missing subscription or unlinked Stripe subscription
+        return jsonify({'error': str(e)}), 404
+    except stripe._error.InvalidRequestError as e:
+        # Handle case where subscription might be in trial and no upcoming invoice exists
+        if 'No upcoming invoices' in str(e) or 'No such subscription' in str(e):
+            return jsonify({'error': 'No upcoming invoice available for this subscription'}), 404
+        return jsonify({'error': f'Stripe error: {str(e)}'}), 400
+    except stripe._error.StripeError as e:
+        return jsonify({'error': f'Stripe error: {str(e)}'}), 400
+    except Exception as e:
+        print(f'Error fetching upcoming invoice: {str(e)}')
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
 @bp.route('/subscriptions/<int:team_id>/members/preview', methods=['POST'])
 def preview_member_addition(team_id):
     """Preview cost of adding a team member."""

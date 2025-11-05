@@ -4,8 +4,11 @@ Stripe payment service skeleton.
 Contains helpers to manage plan catalog and team subscriptions.
 Implementation will be filled after model review and migrations.
 """
+import os
 from datetime import datetime, UTC, timedelta
 from typing import Optional, Dict, Any
+
+import stripe
 
 from src.extensions import db
 from src.models import PaymentPlan, PlanPrice, TeamSubscription, Team
@@ -83,6 +86,94 @@ class StripePaymentService:
             return 0
         active_members = len([m for m in team.members if not m.is_deleted])
         return max(0, active_members - plan.max_team_members_per_team)
+
+    @staticmethod
+    def get_upcoming_invoice_for_team(team_id: int) -> Dict[str, Any]:
+        """
+        Fetch and format the upcoming invoice for a team's subscription.
+        
+        Args:
+            team_id: The ID of the team to fetch the invoice for
+            
+        Returns:
+            Dictionary with 'invoice_data' key containing formatted invoice data,
+            or 'error' key with error message if something went wrong
+            
+        Raises:
+            ValueError: If subscription is not found or not linked to Stripe
+            stripe._error.StripeError: For Stripe API errors
+        """
+        # Get the active subscription
+        subscription = TeamSubscription.query.filter_by(
+            team_id=team_id, 
+            is_active=True, 
+            is_deleted=False
+        ).first()
+        
+        if not subscription:
+            raise ValueError('No active subscription found')
+        
+        if not subscription.stripe_subscription_id:
+            raise ValueError('Subscription not linked to Stripe')
+        
+        # Ensure Stripe API key is set
+        if not getattr(stripe, 'api_key', None):
+            stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+        
+        # Fetch the upcoming invoice from Stripe
+        upcoming_invoice = stripe.Invoice.upcoming(
+            subscription=subscription.stripe_subscription_id
+        )
+        
+        # Format line items
+        line_items = []
+        for item in upcoming_invoice.get('lines', {}).get('data', []):
+            line_items.append({
+                'id': item.get('id'),
+                'description': item.get('description', ''),
+                'amount': item.get('amount', 0),
+                'currency': item.get('currency', 'brl'),
+                'quantity': item.get('quantity', 1),
+                'price': {
+                    'id': item.get('price', {}).get('id'),
+                    'nickname': item.get('price', {}).get('nickname', ''),
+                    'unit_amount': item.get('price', {}).get('unit_amount', 0),
+                    'currency': item.get('price', {}).get('currency', 'brl'),
+                } if item.get('price') else None,
+                'period': {
+                    'start': datetime.fromtimestamp(item.get('period', {}).get('start', 0), UTC).isoformat() if item.get('period', {}).get('start') else None,
+                    'end': datetime.fromtimestamp(item.get('period', {}).get('end', 0), UTC).isoformat() if item.get('period', {}).get('end') else None,
+                } if item.get('period') else None,
+                'proration': item.get('proration', False),
+            })
+        
+        # Format the response
+        invoice_data = {
+            'invoice_id': upcoming_invoice.get('id'),  # May be None for upcoming invoices
+            'subscription_id': upcoming_invoice.get('subscription'),
+            'customer_id': upcoming_invoice.get('customer'),
+            'amount_due': upcoming_invoice.get('amount_due', 0),
+            'amount_paid': upcoming_invoice.get('amount_paid', 0),
+            'amount_remaining': upcoming_invoice.get('amount_remaining', 0),
+            'subtotal': upcoming_invoice.get('subtotal', 0),
+            'total': upcoming_invoice.get('total', 0),
+            'currency': upcoming_invoice.get('currency', 'brl').upper(),
+            'period_start': datetime.fromtimestamp(upcoming_invoice.get('period_start', 0), UTC).isoformat() if upcoming_invoice.get('period_start') else None,
+            'period_end': datetime.fromtimestamp(upcoming_invoice.get('period_end', 0), UTC).isoformat() if upcoming_invoice.get('period_end') else None,
+            'next_payment_attempt': datetime.fromtimestamp(upcoming_invoice.get('next_payment_attempt', 0), UTC).isoformat() if upcoming_invoice.get('next_payment_attempt') else None,
+            'status': upcoming_invoice.get('status'),
+            'line_items': line_items,
+            'discount': {
+                'id': upcoming_invoice.get('discount', {}).get('id'),
+                'coupon_id': upcoming_invoice.get('discount', {}).get('coupon', {}).get('id') if upcoming_invoice.get('discount', {}).get('coupon') else None,
+                'amount_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('amount_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
+                'percent_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('percent_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
+            } if upcoming_invoice.get('discount') else None,
+            'tax': upcoming_invoice.get('tax', 0),
+            'has_proration': any(item.get('proration', False) for item in line_items),
+        }
+        
+        return {'invoice_data': invoice_data}
 
 
 
