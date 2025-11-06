@@ -111,13 +111,14 @@ def get_team_subscription(team_id):
     })
 
 
-@bp.route('/subscriptions/<int:team_id>/upcoming-invoice', methods=['GET'])
-def get_upcoming_invoice(team_id):
-    """Get the upcoming invoice for a team's subscription."""
+@bp.route('/subscriptions/<int:team_id>/billing-summary', methods=['GET'])
+def get_billing_summary(team_id):
+    """Return current and upcoming invoices for a team's subscription."""
     try:
-        result = StripePaymentService.get_upcoming_invoice_for_team(team_id)
+        result = StripePaymentService.get_upcoming_invoice_for_team(team_id, include_current_invoice=True)
         return jsonify({
-            'upcoming_invoice': result['invoice_data']
+            'current_invoice': result.get('current_invoice'),
+            'upcoming_invoice': result.get('invoice_data')
         })
     except ValueError as e:
         # Handle missing subscription or unlinked Stripe subscription
@@ -149,6 +150,30 @@ def preview_member_addition(team_id):
         'included_members_in_plan': validation.get('included_members_in_plan', 0),
         'additional_members': validation.get('additional_members', 0)
     }), 200
+
+
+@bp.route('/subscriptions/<int:team_id>/cancel', methods=['POST'])
+def cancel_subscription(team_id):
+    """Cancel a team's subscription (default: at period end)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        cancel_at_period_end = data.get('cancel_at_period_end', True)
+
+        result = StripePaymentService.cancel_team_subscription(
+            team_id=team_id,
+            cancel_at_period_end=bool(cancel_at_period_end)
+        )
+
+        return jsonify({
+            'success': True,
+            'subscription': result
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except stripe._error.StripeError as e:
+        return jsonify({'error': f'Stripe error: {str(e)}'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
 @bp.route('/subscriptions/<int:team_id>/members/add', methods=['POST'])

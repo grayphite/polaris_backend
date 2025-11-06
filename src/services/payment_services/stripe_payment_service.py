@@ -88,7 +88,7 @@ class StripePaymentService:
         return max(0, active_members - plan.max_team_members_per_team)
 
     @staticmethod
-    def get_upcoming_invoice_for_team(team_id: int) -> Dict[str, Any]:
+    def get_upcoming_invoice_for_team(team_id: int, include_current_invoice: bool = False) -> Dict[str, Any]:
         """
         Fetch and format the upcoming invoice for a team's subscription.
         
@@ -173,7 +173,117 @@ class StripePaymentService:
             'has_proration': any(item.get('proration', False) for item in line_items),
         }
         
-        return {'invoice_data': invoice_data}
+        result: Dict[str, Any] = {'invoice_data': invoice_data}
+
+        if include_current_invoice:
+            try:
+                current = stripe.Invoice.list(subscription=subscription.stripe_subscription_id, limit=1)
+                current_invoice_obj = current['data'][0] if current and current.get('data') else None
+            except Exception:
+                current_invoice_obj = None
+
+            if current_invoice_obj:
+                # Format current invoice similarly (lines may be summarized; keep key fields)
+                current_line_items = []
+                for item in current_invoice_obj.get('lines', {}).get('data', []):
+                    current_line_items.append({
+                        'id': item.get('id'),
+                        'description': item.get('description', ''),
+                        'amount': item.get('amount', 0),
+                        'currency': item.get('currency', 'brl'),
+                        'quantity': item.get('quantity', 1),
+                        'price': {
+                            'id': item.get('price', {}).get('id'),
+                            'nickname': item.get('price', {}).get('nickname', ''),
+                            'unit_amount': item.get('price', {}).get('unit_amount', 0),
+                            'currency': item.get('price', {}).get('currency', 'brl'),
+                        } if item.get('price') else None,
+                        'period': {
+                            'start': datetime.fromtimestamp(item.get('period', {}).get('start', 0), UTC).isoformat() if item.get('period', {}).get('start') else None,
+                            'end': datetime.fromtimestamp(item.get('period', {}).get('end', 0), UTC).isoformat() if item.get('period', {}).get('end') else None,
+                        } if item.get('period') else None,
+                        'proration': item.get('proration', False),
+                    })
+
+                result['current_invoice'] = {
+                    'invoice_id': current_invoice_obj.get('id'),
+                    'subscription_id': current_invoice_obj.get('subscription'),
+                    'customer_id': current_invoice_obj.get('customer'),
+                    'amount_due': current_invoice_obj.get('amount_due', 0),
+                    'amount_paid': current_invoice_obj.get('amount_paid', 0),
+                    'amount_remaining': current_invoice_obj.get('amount_remaining', 0),
+                    'subtotal': current_invoice_obj.get('subtotal', 0),
+                    'total': current_invoice_obj.get('total', 0),
+                    'currency': (current_invoice_obj.get('currency') or 'brl').upper(),
+                    'period_start': datetime.fromtimestamp(current_invoice_obj.get('period_start', 0), UTC).isoformat() if current_invoice_obj.get('period_start') else None,
+                    'period_end': datetime.fromtimestamp(current_invoice_obj.get('period_end', 0), UTC).isoformat() if current_invoice_obj.get('period_end') else None,
+                    'status': current_invoice_obj.get('status'),
+                    'hosted_invoice_url': current_invoice_obj.get('hosted_invoice_url'),
+                    'invoice_pdf': current_invoice_obj.get('invoice_pdf'),
+                    'line_items': current_line_items,
+                }
+            else:
+                result['current_invoice'] = None
+
+        return result
 
 
 
+    @staticmethod
+    def cancel_team_subscription(team_id: int, cancel_at_period_end: bool = True) -> Dict[str, Any]:
+        """
+        Cancel a team's active subscription either immediately or at period end.
+
+        Args:
+            team_id: Team identifier
+            cancel_at_period_end: If True, set cancel_at_period_end on Stripe; if False, cancel immediately
+
+        Returns:
+            Dict with keys: status, cancel_at_period_end, current_period_end, canceled_at
+
+        Raises:
+            ValueError for missing subscription or Stripe linkage
+            stripe._error.StripeError for Stripe API errors
+        """
+        subscription = TeamSubscription.query.filter_by(
+            team_id=team_id, is_active=True, is_deleted=False
+        ).first()
+
+        if not subscription:
+            raise ValueError('No active subscription found')
+
+        if not subscription.stripe_subscription_id:
+            raise ValueError('Subscription not linked to Stripe')
+
+        # Ensure Stripe API key
+        if not getattr(stripe, 'api_key', None):
+            stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+
+        if cancel_at_period_end:
+            stripe_sub = stripe.Subscription.modify(
+                subscription.stripe_subscription_id,
+                cancel_at_period_end=True
+            )
+            subscription.cancel_at_period_end = True
+            # Keep status as-is; Stripe will mark at period end
+        else:
+            stripe_sub = stripe.Subscription.delete(subscription.stripe_subscription_id)
+            subscription.status = 'canceled'
+            subscription.canceled_at = datetime.now(UTC)
+
+        # Reflect period end if present
+        try:
+            cpe = stripe_sub.get('current_period_end') if isinstance(stripe_sub, dict) else getattr(stripe_sub, 'current_period_end', None)
+            if cpe:
+                subscription.current_period_end = datetime.fromtimestamp(cpe)
+        except Exception:
+            pass
+
+        db.session.commit()
+
+        return {
+            'status': subscription.status,
+            'cancel_at_period_end': subscription.cancel_at_period_end,
+            'current_period_end': subscription.current_period_end.isoformat() if subscription.current_period_end else None,
+            'canceled_at': subscription.canceled_at.isoformat() if subscription.canceled_at else None,
+        }
