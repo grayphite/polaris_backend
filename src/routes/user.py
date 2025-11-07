@@ -288,13 +288,13 @@ def login_user():
                         TeamSubscription.is_deleted == False
                     ).all()
                     
-                    # Build subscription objects with all fields None except status="live"
+                    # Build subscription objects with all fields None except status (actual subscription status)
                     for ts in enrolled_subscriptions:
                         ts_obj.append({
                             'id': None,
                             'team_id': ts.team_id,
                             'billing_user_id': None,
-                            'status': 'live',
+                            'status': ts.status,
                             'quantity': None,
                             'trial_end': None,
                             'current_period_start': None,
