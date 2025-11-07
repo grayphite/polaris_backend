@@ -6,6 +6,7 @@ from src.services.auth_service import auth_service
 from src.services.user_service import user_service
 from src.services.team_service import team_service
 from src.models import TeamSubscription
+from src.models.team import TeamMember
 
 user_bp = Blueprint('user', __name__)
 
@@ -106,15 +107,19 @@ def register_user():
                 # User is registered but invitation processing failed
                 # They can manually accept invitation later
 
-        # Build team_subscriptions list for this user (if billing owner)
+        # Build team_subscriptions list for this user
         ts_obj = []
         try:
-            subscriptions = TeamSubscription.query.filter_by(
-                billing_user_id=result.user['id'], 
+            user_id = result.user['id']
+            
+            # Get subscriptions where user is the billing owner
+            billing_subscriptions = TeamSubscription.query.filter_by(
+                billing_user_id=user_id, 
                 is_deleted=False
             ).all()
             
-            for ts in subscriptions:
+            # Build subscription objects for billing owner
+            for ts in billing_subscriptions:
                 ts_obj.append({
                     'id': ts.id,
                     'team_id': ts.team_id,
@@ -149,6 +154,40 @@ def register_user():
                         'per_seat_metric': ts.price.per_seat_metric if ts.price else None,
                     } if ts.price else None,
                 })
+            
+            # For non-billing-owner users: get subscriptions for teams they're enrolled in
+            # Get teams where user is a member (but not the billing owner)
+            enrolled_teams = TeamMember.query.filter_by(
+                user_id=user_id,
+                is_deleted=False
+            ).all()
+            
+            enrolled_team_ids = [tm.team_id for tm in enrolled_teams]
+            
+            if enrolled_team_ids:
+                # Get subscriptions for these teams (excluding ones already added as billing owner)
+                enrolled_subscriptions = TeamSubscription.query.filter(
+                    TeamSubscription.team_id.in_(enrolled_team_ids),
+                    TeamSubscription.billing_user_id != user_id,
+                    TeamSubscription.is_deleted == False
+                ).all()
+                
+                # Build subscription objects with all fields None except status (actual subscription status)
+                for ts in enrolled_subscriptions:
+                    ts_obj.append({
+                        'id': None,
+                        'team_id': ts.team_id,
+                        'billing_user_id': None,
+                        'status': ts.status,
+                        'quantity': None,
+                        'trial_end': None,
+                        'current_period_start': None,
+                        'current_period_end': None,
+                        'cancel_at_period_end': None,
+                        'canceled_at': None,
+                        'plan': None,
+                        'price': None,
+                    })
         except Exception:
             ts_obj = []
 
@@ -184,15 +223,19 @@ def login_user():
         )
 
         if result.success:
-            # Build team_subscriptions list for this user (if billing owner)
+            # Build team_subscriptions list for this user
             ts_obj = []
             try:
-                subscriptions = TeamSubscription.query.filter_by(
-                    billing_user_id=result.user['id'], 
+                user_id = result.user['id']
+                
+                # Get subscriptions where user is the billing owner
+                billing_subscriptions = TeamSubscription.query.filter_by(
+                    billing_user_id=user_id, 
                     is_deleted=False
                 ).all()
                 
-                for ts in subscriptions:
+                # Build subscription objects for billing owner
+                for ts in billing_subscriptions:
                     ts_obj.append({
                         'id': ts.id,
                         'team_id': ts.team_id,
@@ -227,6 +270,40 @@ def login_user():
                             'per_seat_metric': ts.price.per_seat_metric if ts.price else None,
                         } if ts.price else None,
                     })
+                
+                # For non-billing-owner users: get subscriptions for teams they're enrolled in
+                # Get teams where user is a member (but not the billing owner)
+                enrolled_teams = TeamMember.query.filter_by(
+                    user_id=user_id,
+                    is_deleted=False
+                ).all()
+                
+                enrolled_team_ids = [tm.team_id for tm in enrolled_teams]
+                
+                if enrolled_team_ids:
+                    # Get subscriptions for these teams (excluding ones already added as billing owner)
+                    enrolled_subscriptions = TeamSubscription.query.filter(
+                        TeamSubscription.team_id.in_(enrolled_team_ids),
+                        TeamSubscription.billing_user_id != user_id,
+                        TeamSubscription.is_deleted == False
+                    ).all()
+                    
+                    # Build subscription objects with all fields None except status="live"
+                    for ts in enrolled_subscriptions:
+                        ts_obj.append({
+                            'id': None,
+                            'team_id': ts.team_id,
+                            'billing_user_id': None,
+                            'status': 'live',
+                            'quantity': None,
+                            'trial_end': None,
+                            'current_period_start': None,
+                            'current_period_end': None,
+                            'cancel_at_period_end': None,
+                            'canceled_at': None,
+                            'plan': None,
+                            'price': None,
+                        })
             except Exception:
                 ts_obj = []
 
