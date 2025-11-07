@@ -116,22 +116,35 @@ def get_billing_summary(team_id):
     """Return current and upcoming invoices for a team's subscription."""
     try:
         result = StripePaymentService.get_upcoming_invoice_for_team(team_id, include_current_invoice=True)
+        
+        # Also include subscription status info for the frontend
+        subscription = TeamSubscription.query.filter_by(
+            team_id=team_id, 
+            is_active=True, 
+            is_deleted=False
+        ).first()
+        
+        subscription_info = None
+        if subscription:
+            subscription_info = {
+                'status': subscription.status,
+                'cancel_at_period_end': subscription.cancel_at_period_end,
+                'current_period_end': subscription.current_period_end.isoformat() if subscription.current_period_end else None,
+                'canceled_at': subscription.canceled_at.isoformat() if subscription.canceled_at else None,
+            }
+        
         return jsonify({
             'current_invoice': result.get('current_invoice'),
-            'upcoming_invoice': result.get('invoice_data')
+            'upcoming_invoice': result.get('invoice_data'),  # May be None if subscription is set to cancel
+            'subscription': subscription_info
         })
     except ValueError as e:
         # Handle missing subscription or unlinked Stripe subscription
         return jsonify({'error': str(e)}), 404
-    except stripe._error.InvalidRequestError as e:
-        # Handle case where subscription might be in trial and no upcoming invoice exists
-        if 'No upcoming invoices' in str(e) or 'No such subscription' in str(e):
-            return jsonify({'error': 'No upcoming invoice available for this subscription'}), 404
-        return jsonify({'error': f'Stripe error: {str(e)}'}), 400
     except stripe._error.StripeError as e:
         return jsonify({'error': f'Stripe error: {str(e)}'}), 400
     except Exception as e:
-        print(f'Error fetching upcoming invoice: {str(e)}')
+        print(f'Error fetching billing summary: {str(e)}')
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
@@ -169,6 +182,27 @@ def cancel_subscription(team_id):
             'subscription': result
         })
     except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except stripe._error.StripeError as e:
+        return jsonify({'error': f'Stripe error: {str(e)}'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@bp.route('/subscriptions/<int:team_id>/resume', methods=['POST'])
+def resume_subscription(team_id):
+    """Resume a subscription that was scheduled to cancel at period end."""
+    try:
+        result = StripePaymentService.resume_team_subscription(team_id)
+
+        return jsonify({
+            'success': True,
+            'subscription': result
+        })
+    except ValueError as e:
+        # Handle "not scheduled for cancellation" as 400, others as 404
+        if 'not scheduled for cancellation' in str(e):
+            return jsonify({'error': str(e)}), 400
         return jsonify({'error': str(e)}), 404
     except stripe._error.StripeError as e:
         return jsonify({'error': f'Stripe error: {str(e)}'}), 400

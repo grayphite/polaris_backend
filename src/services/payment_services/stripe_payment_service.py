@@ -120,58 +120,75 @@ class StripePaymentService:
         if not getattr(stripe, 'api_key', None):
             stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
         
-        # Fetch the upcoming invoice from Stripe
-        upcoming_invoice = stripe.Invoice.upcoming(
-            subscription=subscription.stripe_subscription_id
-        )
+        # Try to fetch the upcoming invoice from Stripe
+        # This may fail if subscription is set to cancel at period end
+        upcoming_invoice = None
+        invoice_data = None
         
-        # Format line items
-        line_items = []
-        for item in upcoming_invoice.get('lines', {}).get('data', []):
-            line_items.append({
-                'id': item.get('id'),
-                'description': item.get('description', ''),
-                'amount': item.get('amount', 0),
-                'currency': item.get('currency', 'brl'),
-                'quantity': item.get('quantity', 1),
-                'price': {
-                    'id': item.get('price', {}).get('id'),
-                    'nickname': item.get('price', {}).get('nickname', ''),
-                    'unit_amount': item.get('price', {}).get('unit_amount', 0),
-                    'currency': item.get('price', {}).get('currency', 'brl'),
-                } if item.get('price') else None,
-                'period': {
-                    'start': datetime.fromtimestamp(item.get('period', {}).get('start', 0), UTC).isoformat() if item.get('period', {}).get('start') else None,
-                    'end': datetime.fromtimestamp(item.get('period', {}).get('end', 0), UTC).isoformat() if item.get('period', {}).get('end') else None,
-                } if item.get('period') else None,
-                'proration': item.get('proration', False),
-            })
-        
-        # Format the response
-        invoice_data = {
-            'invoice_id': upcoming_invoice.get('id'),  # May be None for upcoming invoices
-            'subscription_id': upcoming_invoice.get('subscription'),
-            'customer_id': upcoming_invoice.get('customer'),
-            'amount_due': upcoming_invoice.get('amount_due', 0),
-            'amount_paid': upcoming_invoice.get('amount_paid', 0),
-            'amount_remaining': upcoming_invoice.get('amount_remaining', 0),
-            'subtotal': upcoming_invoice.get('subtotal', 0),
-            'total': upcoming_invoice.get('total', 0),
-            'currency': upcoming_invoice.get('currency', 'brl').upper(),
-            'period_start': datetime.fromtimestamp(upcoming_invoice.get('period_start', 0), UTC).isoformat() if upcoming_invoice.get('period_start') else None,
-            'period_end': datetime.fromtimestamp(upcoming_invoice.get('period_end', 0), UTC).isoformat() if upcoming_invoice.get('period_end') else None,
-            'next_payment_attempt': datetime.fromtimestamp(upcoming_invoice.get('next_payment_attempt', 0), UTC).isoformat() if upcoming_invoice.get('next_payment_attempt') else None,
-            'status': upcoming_invoice.get('status'),
-            'line_items': line_items,
-            'discount': {
-                'id': upcoming_invoice.get('discount', {}).get('id'),
-                'coupon_id': upcoming_invoice.get('discount', {}).get('coupon', {}).get('id') if upcoming_invoice.get('discount', {}).get('coupon') else None,
-                'amount_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('amount_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
-                'percent_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('percent_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
-            } if upcoming_invoice.get('discount') else None,
-            'tax': upcoming_invoice.get('tax', 0),
-            'has_proration': any(item.get('proration', False) for item in line_items),
-        }
+        try:
+            upcoming_invoice = stripe.Invoice.upcoming(
+                subscription=subscription.stripe_subscription_id
+            )
+            
+            # Format line items
+            line_items = []
+            for item in upcoming_invoice.get('lines', {}).get('data', []):
+                line_items.append({
+                    'id': item.get('id'),
+                    'description': item.get('description', ''),
+                    'amount': item.get('amount', 0),
+                    'currency': item.get('currency', 'brl'),
+                    'quantity': item.get('quantity', 1),
+                    'price': {
+                        'id': item.get('price', {}).get('id'),
+                        'nickname': item.get('price', {}).get('nickname', ''),
+                        'unit_amount': item.get('price', {}).get('unit_amount', 0),
+                        'currency': item.get('price', {}).get('currency', 'brl'),
+                    } if item.get('price') else None,
+                    'period': {
+                        'start': datetime.fromtimestamp(item.get('period', {}).get('start', 0), UTC).isoformat() if item.get('period', {}).get('start') else None,
+                        'end': datetime.fromtimestamp(item.get('period', {}).get('end', 0), UTC).isoformat() if item.get('period', {}).get('end') else None,
+                    } if item.get('period') else None,
+                    'proration': item.get('proration', False),
+                })
+            
+            # Format the response
+            invoice_data = {
+                'invoice_id': upcoming_invoice.get('id'),  # May be None for upcoming invoices
+                'subscription_id': upcoming_invoice.get('subscription'),
+                'customer_id': upcoming_invoice.get('customer'),
+                'amount_due': upcoming_invoice.get('amount_due', 0),
+                'amount_paid': upcoming_invoice.get('amount_paid', 0),
+                'amount_remaining': upcoming_invoice.get('amount_remaining', 0),
+                'subtotal': upcoming_invoice.get('subtotal', 0),
+                'total': upcoming_invoice.get('total', 0),
+                'currency': upcoming_invoice.get('currency', 'brl').upper(),
+                'period_start': datetime.fromtimestamp(upcoming_invoice.get('period_start', 0), UTC).isoformat() if upcoming_invoice.get('period_start') else None,
+                'period_end': datetime.fromtimestamp(upcoming_invoice.get('period_end', 0), UTC).isoformat() if upcoming_invoice.get('period_end') else None,
+                'next_payment_attempt': datetime.fromtimestamp(upcoming_invoice.get('next_payment_attempt', 0), UTC).isoformat() if upcoming_invoice.get('next_payment_attempt') else None,
+                'status': upcoming_invoice.get('status'),
+                'line_items': line_items,
+                'discount': {
+                    'id': upcoming_invoice.get('discount', {}).get('id'),
+                    'coupon_id': upcoming_invoice.get('discount', {}).get('coupon', {}).get('id') if upcoming_invoice.get('discount', {}).get('coupon') else None,
+                    'amount_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('amount_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
+                    'percent_off': upcoming_invoice.get('discount', {}).get('coupon', {}).get('percent_off', 0) if upcoming_invoice.get('discount', {}).get('coupon') else None,
+                } if upcoming_invoice.get('discount') else None,
+                'tax': upcoming_invoice.get('tax', 0),
+                'has_proration': any(item.get('proration', False) for item in line_items),
+            }
+        except stripe._error.InvalidRequestError as e:
+            # If subscription is set to cancel, there may be no upcoming invoice
+            # This is expected behavior - we'll return null for upcoming_invoice
+            if 'No upcoming invoices' in str(e) or 'No such subscription' in str(e):
+                invoice_data = None
+            else:
+                # Re-raise other InvalidRequestErrors
+                raise
+        except Exception as e:
+            # Log but don't fail - we'll still return current invoice
+            print(f'Warning: Could not fetch upcoming invoice: {str(e)}')
+            invoice_data = None
         
         result: Dict[str, Any] = {'invoice_data': invoice_data}
 
@@ -272,6 +289,66 @@ class StripePaymentService:
             subscription.canceled_at = datetime.now(UTC)
 
         # Reflect period end if present
+        try:
+            cpe = stripe_sub.get('current_period_end') if isinstance(stripe_sub, dict) else getattr(stripe_sub, 'current_period_end', None)
+            if cpe:
+                subscription.current_period_end = datetime.fromtimestamp(cpe)
+        except Exception:
+            pass
+
+        db.session.commit()
+
+        return {
+            'status': subscription.status,
+            'cancel_at_period_end': subscription.cancel_at_period_end,
+            'current_period_end': subscription.current_period_end.isoformat() if subscription.current_period_end else None,
+            'canceled_at': subscription.canceled_at.isoformat() if subscription.canceled_at else None,
+        }
+
+    @staticmethod
+    def resume_team_subscription(team_id: int) -> Dict[str, Any]:
+        """
+        Resume a subscription that was scheduled to cancel at period end.
+        Removes the cancel_at_period_end flag, allowing the subscription to continue.
+
+        Args:
+            team_id: Team identifier
+
+        Returns:
+            Dict with keys: status, cancel_at_period_end, current_period_end, canceled_at
+
+        Raises:
+            ValueError if subscription not found, not linked to Stripe, or not scheduled for cancellation
+            stripe._error.StripeError for Stripe API errors
+        """
+        subscription = TeamSubscription.query.filter_by(
+            team_id=team_id, is_active=True, is_deleted=False
+        ).first()
+
+        if not subscription:
+            raise ValueError('No active subscription found')
+
+        if not subscription.stripe_subscription_id:
+            raise ValueError('Subscription not linked to Stripe')
+
+        if not subscription.cancel_at_period_end:
+            raise ValueError('Subscription is not scheduled for cancellation')
+
+        # Ensure Stripe API key
+        if not getattr(stripe, 'api_key', None):
+            stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+
+        # Remove cancel_at_period_end flag
+        stripe_sub = stripe.Subscription.modify(
+            subscription.stripe_subscription_id,
+            cancel_at_period_end=False
+        )
+
+        # Update local subscription
+        subscription.cancel_at_period_end = False
+        subscription.canceled_at = None  # Clear canceled_at since we're resuming
+
+        # Update period end from Stripe if available
         try:
             cpe = stripe_sub.get('current_period_end') if isinstance(stripe_sub, dict) else getattr(stripe_sub, 'current_period_end', None)
             if cpe:
