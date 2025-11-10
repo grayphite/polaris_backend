@@ -564,7 +564,19 @@ class TeamService:
             member.removed_by = user_id
             member.updated_at = datetime.now(UTC)
             
-            db.session.commit()
+            # Sync subscription quantity with Stripe to update overage billing
+            # This will recalculate overage based on new member count and update Stripe immediately
+            # Note: sync_subscription_quantity_with_stripe commits the session, so we don't need another commit
+            try:
+                from src.services.payment_services.usage_billing_service import UsageBillingService
+                UsageBillingService.sync_subscription_quantity_with_stripe(team_id)
+                self.logger.info(f"Subscription quantity synced with Stripe after member removal for team {team_id}")
+                # Sync function commits, so member deletion is already committed
+            except Exception as sync_error:
+                # Log but don't fail the member removal if sync fails
+                self.logger.warning(f"Failed to sync subscription quantity after member removal: {str(sync_error)}")
+                # If sync fails, we still need to commit the member deletion
+                db.session.commit()
             
             self.logger.info(f"Member removed from team {team_id}: user {member_user_id} by user {user_id}")
             

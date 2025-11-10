@@ -633,7 +633,26 @@ class InvitationService:
                             return InvitationResult(success=False, error="Cannot auto-delete user: user owns one or more teams")
 
                         # 3.1.b Remove team and project memberships to satisfy NOT NULL / FK constraints
+                        # First, get all team IDs where this user is a member (before deletion) for subscription sync
+                        affected_team_ids = [
+                            tm.team_id for tm in TeamMember.query.filter_by(
+                                user_id=invited_user.id,
+                                is_deleted=False
+                            ).all()
+                        ]
+                        
+                        # Now delete team memberships
                         TeamMember.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
+                        
+                        # Sync subscription quantity with Stripe for each affected team
+                        # This updates overage billing immediately after member removal
+                        for team_id in affected_team_ids:
+                            try:
+                                UsageBillingService.sync_subscription_quantity_with_stripe(team_id)
+                                self.logger.info(f"Subscription quantity synced with Stripe after member removal from team {team_id}")
+                            except Exception as sync_error:
+                                # Log but don't fail the deletion if sync fails
+                                self.logger.warning(f"Failed to sync subscription quantity for team {team_id} after member removal: {str(sync_error)}")
                         # Clear added_by/removed_by refs in ProjectMember before deleting memberships
                         db.session.query(ProjectMember).filter(ProjectMember.added_by == invited_user.id).update({ProjectMember.added_by: None}, synchronize_session=False)
                         db.session.query(ProjectMember).filter(ProjectMember.removed_by == invited_user.id).update({ProjectMember.removed_by: None}, synchronize_session=False)
