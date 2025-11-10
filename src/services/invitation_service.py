@@ -18,7 +18,7 @@ from src.models.team import Team, TeamMember
 from src.models.user import User
 from src.models.audit_log import AuditLog
 from src.models.chat import Chat
-from src.models.project import Project
+from src.models.project import Project, ProjectMember
 from src.models.ai_chat import AIChat, AIStats
 from src.models.documents import DocumentoUpload
 from src.models.documento_gerado import DocumentoGerado
@@ -632,8 +632,13 @@ class InvitationService:
                         if owns_teams:
                             return InvitationResult(success=False, error="Cannot auto-delete user: user owns one or more teams")
 
-                        # 3.1.b Remove team memberships to satisfy NOT NULL / FK constraints
+                        # 3.1.b Remove team and project memberships to satisfy NOT NULL / FK constraints
                         TeamMember.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
+                        # Clear added_by/removed_by refs in ProjectMember before deleting memberships
+                        db.session.query(ProjectMember).filter(ProjectMember.added_by == invited_user.id).update({ProjectMember.added_by: None}, synchronize_session=False)
+                        db.session.query(ProjectMember).filter(ProjectMember.removed_by == invited_user.id).update({ProjectMember.removed_by: None}, synchronize_session=False)
+                        # Delete ProjectMember records where user is a member
+                        ProjectMember.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
 
                         # 3.1.c Detach audit logs (break FK to users)
                         db.session.query(AuditLog).filter(AuditLog.user_id == invited_user.id).update({AuditLog.user_id: None}, synchronize_session=False)
