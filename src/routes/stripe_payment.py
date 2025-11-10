@@ -432,18 +432,23 @@ def handle_checkout_completed(session):
     ).first()
     
     if not subscription:
+        # Initial status: 'incomplete' if no trial (payment required), 'trialing' if trial exists
+        # This will be updated by subscription.created or subscription.updated webhook
+        payment_status = session.get('payment_status', 'unpaid')
+        initial_status = 'incomplete' if payment_status == 'unpaid' else 'trialing'
+        
         subscription = TeamSubscription(
             team_id=int(team_id),
             billing_user_id=int(billing_user_id),
             plan_id=int(plan_id),
             price_id=int(price_id),
             stripe_customer_id=session.get('customer'),
-            status='trialing'  # Will be updated by subscription webhook
+            status=initial_status  # Will be updated by subscription webhook
         )
         db.session.add(subscription)
     
     db.session.commit()
-    print(f'Checkout completed for team {team_id}')
+    print(f'Checkout completed for team {team_id}, initial status: {subscription.status}')
 
 
 def handle_subscription_created(subscription):
@@ -556,8 +561,25 @@ def handle_payment_succeeded(invoice):
         
         if local_subscription:
             local_subscription.stripe_latest_invoice_id = invoice['id']
+            # Update status to active when payment succeeds (especially for subscriptions without trial)
+            # This handles the case where subscription was "incomplete" and payment just succeeded
+            if local_subscription.status in ['incomplete', 'trialing']:
+                # Fetch current status from Stripe to ensure accuracy
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                    local_subscription.status = stripe_sub.get('status', 'active')
+                    # Update period dates from Stripe
+                    if stripe_sub.get('current_period_start'):
+                        local_subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                    if stripe_sub.get('current_period_end'):
+                        local_subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+                except Exception as e:
+                    # Fallback: set to active if we can't fetch from Stripe
+                    print(f'Warning: Could not fetch subscription from Stripe: {e}')
+                    local_subscription.status = 'active'
+            
             db.session.commit()
-            print(f'Payment succeeded for subscription: {subscription_id}')
+            print(f'Payment succeeded for subscription: {subscription_id}, status updated to: {local_subscription.status}')
 
 
 def handle_payment_failed(invoice):
