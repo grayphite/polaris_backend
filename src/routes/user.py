@@ -21,6 +21,9 @@ def register_user():
         if not data.get('email') or not data.get('senha'):
             return jsonify({'error': 'Email e senha são obrigatórios'}), 400
 
+        # Normalize email (lowercase and trim)
+        email = data['email'].lower().strip()
+        
         # Registrar usuário via AuthService
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
@@ -48,15 +51,15 @@ def register_user():
                 return jsonify({'error': 'Convite não pode ser aceito (expirado ou já processado)'}), 400
             
             # Verify email matches invitation
-            if data['email'].lower().strip() != invitation.invited_email.lower().strip():
+            if email != invitation.invited_email.lower().strip():
                 return jsonify({'error': 'Email não corresponde ao convite enviado'}), 400
             
             # Set role from invitation (should be 'member' for invited users)
             user_role = invitation.role if invitation.role else 'member'
 
         result = auth_service.register_user(
-            username=data['email'],  # Usar email como username
-            email=data['email'],
+            # username will be auto-generated (not passed)
+            email=email,
             password=data['senha'],
             first_name=first_name,
             last_name=last_name,
