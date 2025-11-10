@@ -94,29 +94,70 @@ def get_plans():
 @bp.route('/subscriptions/<int:team_id>', methods=['GET'])
 def get_team_subscription(team_id):
     """Get team's active subscription details."""
-    # Get all active subscriptions for this team, ordered by ID (most recent first)
-    # This handles edge cases where multiple subscriptions might be marked as active
-    subscriptions = TeamSubscription.query.filter_by(
-        team_id=team_id, 
-        is_active=True, 
-        is_deleted=False
-    ).order_by(TeamSubscription.id.desc()).all()
-    
-    if not subscriptions:
-        return jsonify({'error': 'No active subscription found'}), 404
-    
-    # If multiple active subscriptions found, deactivate all except the most recent one
-    if len(subscriptions) > 1:
-        print(f'Warning: Found {len(subscriptions)} active subscriptions for team {team_id}. Deactivating old ones.')
-        # Keep the first one (most recent), deactivate the rest
-        for old_sub in subscriptions[1:]:
-            old_sub.is_active = False
-            print(f'Deactivated duplicate active subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id}')
-        db.session.commit()
-        # Re-fetch to get the updated state
-        subscription = subscriptions[0]
-    else:
-        subscription = subscriptions[0]
+    try:
+        # First, clean up any canceled subscriptions that are still marked as active
+        canceled_but_active = TeamSubscription.query.filter_by(
+            team_id=team_id,
+            is_active=True,
+            is_deleted=False
+        ).filter(
+            TeamSubscription.status == 'canceled'
+        ).all()
+        
+        if canceled_but_active:
+            try:
+                for sub in canceled_but_active:
+                    sub.is_active = False
+                    print(f'Deactivated canceled subscription {sub.id} (status: canceled) for team {team_id}')
+                db.session.commit()
+            except Exception as cleanup_error:
+                # Log but don't fail the request if cleanup fails
+                print(f'Warning: Failed to deactivate canceled subscriptions for team {team_id}: {cleanup_error}')
+                db.session.rollback()
+        
+        # Get all active subscriptions for this team, excluding canceled ones
+        # Ordered by ID (most recent first)
+        subscriptions = TeamSubscription.query.filter_by(
+            team_id=team_id, 
+            is_active=True, 
+            is_deleted=False
+        ).filter(
+            TeamSubscription.status != 'canceled'
+        ).order_by(TeamSubscription.id.desc()).all()
+        
+        if not subscriptions:
+            return jsonify({'error': 'No active subscription found'}), 404
+        
+        # If multiple active subscriptions found, deactivate all except the most recent one
+        if len(subscriptions) > 1:
+            print(f'Warning: Found {len(subscriptions)} active subscriptions for team {team_id}. Deactivating old ones.')
+            try:
+                # Keep the first one (most recent), deactivate the rest
+                for old_sub in subscriptions[1:]:
+                    old_sub.is_active = False
+                    print(f'Deactivated duplicate active subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id}')
+                db.session.commit()
+            except Exception as deactivate_error:
+                # Log but don't fail the request if deactivation fails
+                print(f'Warning: Failed to deactivate duplicate subscriptions for team {team_id}: {deactivate_error}')
+                db.session.rollback()
+            # Use the first subscription regardless of whether deactivation succeeded
+            subscription = subscriptions[0]
+        else:
+            subscription = subscriptions[0]
+    except Exception as e:
+        # If there's any error in the cleanup logic, still try to get a subscription
+        print(f'Error in subscription cleanup for team {team_id}: {e}')
+        subscription = TeamSubscription.query.filter_by(
+            team_id=team_id, 
+            is_active=True, 
+            is_deleted=False
+        ).filter(
+            TeamSubscription.status != 'canceled'
+        ).order_by(TeamSubscription.id.desc()).first()
+        
+        if not subscription:
+            return jsonify({'error': 'No active subscription found'}), 404
     
     # If subscription status is incomplete, sync from Stripe to get latest status
     # This handles cases where webhooks were delayed or missed
@@ -764,9 +805,10 @@ def handle_subscription_deleted(subscription):
     
     if local_subscription:
         local_subscription.status = 'canceled'
+        local_subscription.is_active = False  # Ensure canceled subscriptions are marked inactive
         local_subscription.canceled_at = datetime.fromtimestamp(subscription.get('canceled_at', datetime.now().timestamp()))
         db.session.commit()
-        print(f'Subscription canceled: {subscription["id"]}')
+        print(f'Subscription canceled and deactivated: {subscription["id"]}')
 
 
 def handle_payment_succeeded(invoice):

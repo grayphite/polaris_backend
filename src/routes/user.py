@@ -23,7 +23,7 @@ def register_user():
 
         # Normalize email (lowercase and trim)
         email = data['email'].lower().strip()
-        
+
         # Registrar usuário via AuthService
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
@@ -115,11 +115,24 @@ def register_user():
         try:
             user_id = result.user['id']
             
-            # Get subscriptions where user is the billing owner
-            billing_subscriptions = TeamSubscription.query.filter_by(
+            # Get active subscriptions where user is the billing owner
+            # Exclude canceled subscriptions and only get active ones
+            # Group by team_id and get the most recent one per team
+            billing_subscriptions_query = TeamSubscription.query.filter_by(
                 billing_user_id=user_id, 
-                is_deleted=False
-            ).all()
+                is_deleted=False,
+                is_active=True
+            ).filter(
+                TeamSubscription.status != 'canceled'
+            ).order_by(TeamSubscription.id.desc())
+            
+            # Get the most recent subscription per team
+            seen_teams = set()
+            billing_subscriptions = []
+            for ts in billing_subscriptions_query.all():
+                if ts.team_id not in seen_teams:
+                    billing_subscriptions.append(ts)
+                    seen_teams.add(ts.team_id)
             
             # Build subscription objects for billing owner
             for ts in billing_subscriptions:
@@ -168,12 +181,24 @@ def register_user():
             enrolled_team_ids = [tm.team_id for tm in enrolled_teams]
             
             if enrolled_team_ids:
-                # Get subscriptions for these teams (excluding ones already added as billing owner)
-                enrolled_subscriptions = TeamSubscription.query.filter(
+                # Get active subscriptions for these teams (excluding ones already added as billing owner)
+                # Exclude canceled subscriptions and only get active ones
+                enrolled_subscriptions_query = TeamSubscription.query.filter(
                     TeamSubscription.team_id.in_(enrolled_team_ids),
                     TeamSubscription.billing_user_id != user_id,
-                    TeamSubscription.is_deleted == False
-                ).all()
+                    TeamSubscription.is_deleted == False,
+                    TeamSubscription.is_active == True
+                ).filter(
+                    TeamSubscription.status != 'canceled'
+                ).order_by(TeamSubscription.id.desc())
+                
+                # Get the most recent subscription per team
+                seen_enrolled_teams = set()
+                enrolled_subscriptions = []
+                for ts in enrolled_subscriptions_query.all():
+                    if ts.team_id not in seen_enrolled_teams:
+                        enrolled_subscriptions.append(ts)
+                        seen_enrolled_teams.add(ts.team_id)
                 
                 # Build subscription objects with all fields None except status (actual subscription status)
                 for ts in enrolled_subscriptions:
@@ -231,11 +256,24 @@ def login_user():
             try:
                 user_id = result.user['id']
                 
-                # Get subscriptions where user is the billing owner
-                billing_subscriptions = TeamSubscription.query.filter_by(
+                # Get active subscriptions where user is the billing owner
+                # Exclude canceled subscriptions and only get active ones
+                # Group by team_id and get the most recent one per team
+                billing_subscriptions_query = TeamSubscription.query.filter_by(
                     billing_user_id=user_id, 
-                    is_deleted=False
-                ).all()
+                    is_deleted=False,
+                    is_active=True
+                ).filter(
+                    TeamSubscription.status != 'canceled'
+                ).order_by(TeamSubscription.id.desc())
+                
+                # Get the most recent subscription per team
+                seen_teams = set()
+                billing_subscriptions = []
+                for ts in billing_subscriptions_query.all():
+                    if ts.team_id not in seen_teams:
+                        billing_subscriptions.append(ts)
+                        seen_teams.add(ts.team_id)
                 
                 # Build subscription objects for billing owner
                 for ts in billing_subscriptions:
@@ -284,12 +322,24 @@ def login_user():
                 enrolled_team_ids = [tm.team_id for tm in enrolled_teams]
                 
                 if enrolled_team_ids:
-                    # Get subscriptions for these teams (excluding ones already added as billing owner)
-                    enrolled_subscriptions = TeamSubscription.query.filter(
+                    # Get active subscriptions for these teams (excluding ones already added as billing owner)
+                    # Exclude canceled subscriptions and only get active ones
+                    enrolled_subscriptions_query = TeamSubscription.query.filter(
                         TeamSubscription.team_id.in_(enrolled_team_ids),
                         TeamSubscription.billing_user_id != user_id,
-                        TeamSubscription.is_deleted == False
-                    ).all()
+                        TeamSubscription.is_deleted == False,
+                        TeamSubscription.is_active == True
+                    ).filter(
+                        TeamSubscription.status != 'canceled'
+                    ).order_by(TeamSubscription.id.desc())
+                    
+                    # Get the most recent subscription per team
+                    seen_enrolled_teams = set()
+                    enrolled_subscriptions = []
+                    for ts in enrolled_subscriptions_query.all():
+                        if ts.team_id not in seen_enrolled_teams:
+                            enrolled_subscriptions.append(ts)
+                            seen_enrolled_teams.add(ts.team_id)
                     
                     # Build subscription objects with all fields None except status (actual subscription status)
                     for ts in enrolled_subscriptions:

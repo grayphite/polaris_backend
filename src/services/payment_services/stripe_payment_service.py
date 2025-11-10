@@ -286,6 +286,7 @@ class StripePaymentService:
         else:
             stripe_sub = stripe.Subscription.delete(subscription.stripe_subscription_id)
             subscription.status = 'canceled'
+            subscription.is_active = False  # Deactivate immediately canceled subscriptions
             subscription.canceled_at = datetime.now(UTC)
 
         # Reflect period end if present
