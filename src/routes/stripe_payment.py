@@ -451,19 +451,38 @@ def handle_checkout_completed(session):
     payment_status = session.get('payment_status', 'unpaid')
     
     # Create or update local subscription record
-    subscription = TeamSubscription.query.filter_by(
-        team_id=int(team_id), 
-        is_deleted=False
-    ).first()
+    # For resubscriptions, Stripe creates a NEW subscription with a new ID
+    # So we should check if this subscription_id already exists, or create new
+    subscription = None
     
+    # First, check if this specific Stripe subscription already exists
+    if subscription_id:
+        subscription = TeamSubscription.query.filter_by(
+            stripe_subscription_id=subscription_id
+        ).first()
+    
+    # If not found by subscription_id, check for active subscription for this team
     if not subscription:
-        # Initial status based on payment and trial
-        # If payment is paid and no trial, status should be 'active'
-        # If payment is unpaid (trial), status should be 'trialing'
-        if payment_status == 'paid':
-            initial_status = 'active'
-        else:
-            initial_status = 'trialing'  # Trial period, payment not yet required
+        subscription = TeamSubscription.query.filter_by(
+            team_id=int(team_id), 
+            is_deleted=False,
+            is_active=True
+        ).first()
+    
+    # If still not found, this is likely a new subscription (resubscription after cancel)
+    # Create a new subscription record instead of updating the old canceled one
+    if not subscription:
+        # Always fetch actual status from Stripe to ensure accuracy
+        initial_status = 'incomplete'  # Default, will be updated from Stripe
+        if subscription_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                initial_status = stripe_sub.get('status', 'incomplete')
+                print(f'Fetched subscription status from Stripe: {initial_status}')
+            except Exception as e:
+                print(f'Warning: Could not fetch subscription from Stripe: {e}')
+                # Fallback based on payment_status
+                initial_status = 'active' if payment_status == 'paid' else 'incomplete'
         
         subscription = TeamSubscription(
             team_id=int(team_id),
@@ -474,15 +493,51 @@ def handle_checkout_completed(session):
             stripe_subscription_id=subscription_id,
             status=initial_status
         )
+        
+        # Set period dates if available from Stripe
+        if subscription_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                if stripe_sub.get('current_period_start'):
+                    subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                if stripe_sub.get('current_period_end'):
+                    subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+            except Exception:
+                pass
+        
         db.session.add(subscription)
     else:
         # Update existing subscription
-        if subscription_id:
-            subscription.stripe_subscription_id = subscription_id
-        if payment_status == 'paid' and subscription.status == 'incomplete':
-            # Payment was successful, update to active
-            subscription.status = 'active'
-            # Try to get subscription details from Stripe to update period dates
+        # If this is a different subscription_id, it means it's a new subscription
+        # In that case, mark old subscription as inactive and create new one
+        if subscription_id and subscription.stripe_subscription_id and subscription.stripe_subscription_id != subscription_id:
+            # This is a new subscription (resubscription), mark old one as inactive
+            old_subscription = subscription
+            old_subscription.is_active = False
+            db.session.flush()
+            
+            # Create new subscription record - always fetch status from Stripe
+            initial_status = 'incomplete'
+            if subscription_id:
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                    initial_status = stripe_sub.get('status', 'incomplete')
+                except Exception as e:
+                    print(f'Warning: Could not fetch subscription status: {e}')
+                    initial_status = 'active' if payment_status == 'paid' else 'incomplete'
+            
+            subscription = TeamSubscription(
+                team_id=int(team_id),
+                billing_user_id=int(billing_user_id),
+                plan_id=int(plan_id),
+                price_id=int(price_id),
+                stripe_customer_id=session.get('customer'),
+                stripe_subscription_id=subscription_id,
+                status=initial_status,
+                is_active=True
+            )
+            
+            # Set period dates if available
             if subscription_id:
                 try:
                     stripe_sub = stripe.Subscription.retrieve(subscription_id)
@@ -490,8 +545,44 @@ def handle_checkout_completed(session):
                         subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
                     if stripe_sub.get('current_period_end'):
                         subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
-                except Exception as e:
-                    print(f'Warning: Could not fetch subscription from Stripe in checkout.completed: {e}')
+                except Exception:
+                    pass
+            
+            db.session.add(subscription)
+            print(f'Created new subscription record for resubscription, team {team_id}, status: {initial_status}')
+        else:
+            # Update existing subscription (same subscription_id)
+            if subscription_id:
+                subscription.stripe_subscription_id = subscription_id
+            
+            # Reactivate if it was previously canceled
+            if subscription.status == 'canceled':
+                subscription.status = 'incomplete'  # Will be updated by Stripe status
+                subscription.canceled_at = None
+                subscription.cancel_at_period_end = False
+                subscription.is_active = True
+                print(f'Reactivating canceled subscription for team {team_id}')
+        
+        # Always sync status from Stripe when subscription_id is available
+        # This ensures we have the actual subscription status, not just payment_status
+        if subscription_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                stripe_status = stripe_sub.get('status', subscription.status)
+                subscription.status = stripe_status
+                subscription.is_active = True  # Ensure it's marked as active
+                # Update period dates from Stripe
+                if stripe_sub.get('current_period_start'):
+                    subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                if stripe_sub.get('current_period_end'):
+                    subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+                print(f'Synced subscription status from Stripe in checkout.completed: {stripe_status}')
+            except Exception as e:
+                print(f'Warning: Could not fetch subscription from Stripe in checkout.completed: {e}')
+                # Fallback: if payment_status is paid, assume active
+                if payment_status == 'paid' and subscription.status in ['incomplete', 'canceled']:
+                    subscription.status = 'active'
+                    subscription.is_active = True
     
     db.session.commit()
     print(f'Checkout completed for team {team_id}, payment_status: {payment_status}, status: {subscription.status}')
