@@ -103,6 +103,27 @@ def get_team_subscription(team_id):
     if not subscription:
         return jsonify({'error': 'No active subscription found'}), 404
     
+    # If subscription status is incomplete, sync from Stripe to get latest status
+    # This handles cases where webhooks were delayed or missed
+    if subscription.status == 'incomplete' and subscription.stripe_subscription_id:
+        try:
+            stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id)
+            stripe_status = stripe_sub.get('status', 'incomplete')
+            
+            # Update local status if it changed in Stripe
+            if stripe_status != subscription.status:
+                subscription.status = stripe_status
+                # Update period dates if available
+                if stripe_sub.get('current_period_start'):
+                    subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                if stripe_sub.get('current_period_end'):
+                    subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+                db.session.commit()
+                print(f'Synced subscription status from Stripe for team {team_id}: {stripe_status}')
+        except Exception as e:
+            print(f'Warning: Could not sync subscription status from Stripe: {e}')
+            # Continue with local status if sync fails
+    
     return jsonify({
         'subscription': {
             'id': subscription.id,
@@ -425,17 +446,24 @@ def handle_checkout_completed(session):
         print(f'Missing metadata in checkout session: {session["id"]}')
         return
     
-    # Create local subscription record
+    # Get subscription ID from checkout session if available
+    subscription_id = session.get('subscription')
+    payment_status = session.get('payment_status', 'unpaid')
+    
+    # Create or update local subscription record
     subscription = TeamSubscription.query.filter_by(
         team_id=int(team_id), 
         is_deleted=False
     ).first()
     
     if not subscription:
-        # Initial status: 'incomplete' if no trial (payment required), 'trialing' if trial exists
-        # This will be updated by subscription.created or subscription.updated webhook
-        payment_status = session.get('payment_status', 'unpaid')
-        initial_status = 'incomplete' if payment_status == 'unpaid' else 'trialing'
+        # Initial status based on payment and trial
+        # If payment is paid and no trial, status should be 'active'
+        # If payment is unpaid (trial), status should be 'trialing'
+        if payment_status == 'paid':
+            initial_status = 'active'
+        else:
+            initial_status = 'trialing'  # Trial period, payment not yet required
         
         subscription = TeamSubscription(
             team_id=int(team_id),
@@ -443,12 +471,30 @@ def handle_checkout_completed(session):
             plan_id=int(plan_id),
             price_id=int(price_id),
             stripe_customer_id=session.get('customer'),
-            status=initial_status  # Will be updated by subscription webhook
+            stripe_subscription_id=subscription_id,
+            status=initial_status
         )
         db.session.add(subscription)
+    else:
+        # Update existing subscription
+        if subscription_id:
+            subscription.stripe_subscription_id = subscription_id
+        if payment_status == 'paid' and subscription.status == 'incomplete':
+            # Payment was successful, update to active
+            subscription.status = 'active'
+            # Try to get subscription details from Stripe to update period dates
+            if subscription_id:
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                    if stripe_sub.get('current_period_start'):
+                        subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                    if stripe_sub.get('current_period_end'):
+                        subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+                except Exception as e:
+                    print(f'Warning: Could not fetch subscription from Stripe in checkout.completed: {e}')
     
     db.session.commit()
-    print(f'Checkout completed for team {team_id}, initial status: {subscription.status}')
+    print(f'Checkout completed for team {team_id}, payment_status: {payment_status}, status: {subscription.status}')
 
 
 def handle_subscription_created(subscription):
@@ -485,8 +531,9 @@ def handle_subscription_created(subscription):
             db.session.flush()
         
         # Update fields from Stripe
+        stripe_status = subscription.get('status', 'incomplete')
         local_subscription.stripe_subscription_id = subscription.get('id')
-        local_subscription.status = subscription.get('status', local_subscription.status)
+        local_subscription.status = stripe_status  # Always use status from Stripe
         cps = subscription.get('current_period_start')
         cpe = subscription.get('current_period_end')
         te = subscription.get('trial_end')
@@ -502,8 +549,14 @@ def handle_subscription_created(subscription):
                 team.has_used_trial = True
                 print(f'Marked team {team_id} as having used trial')
         
+        # If subscription is active in Stripe but local status is incomplete, update it
+        # This handles the case where payment succeeded but webhook order was different
+        if stripe_status == 'active' and local_subscription.status == 'incomplete':
+            local_subscription.status = 'active'
+            print(f'Updated subscription status from incomplete to active for team {team_id}')
+        
         db.session.commit()
-        print(f'Subscription created/linked for team {team_id}')
+        print(f'Subscription created/linked for team {team_id}, status: {local_subscription.status}')
     except Exception as e:
         db.session.rollback()
         print(f'ERROR in handle_subscription_created: {e}')
