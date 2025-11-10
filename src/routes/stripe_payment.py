@@ -242,13 +242,6 @@ def create_checkout_session(team_id):
     """Create Stripe checkout session for team subscription."""
     data = request.get_json()
     price_id = data.get('price_id')
-    # Resolve trial days: prefer env TRIAL_PERIOD_DAYS, fallback to body, then 7
-    env_trial = os.getenv('TRIAL_PERIOD_DAYS')
-    try:
-        trial_days = int(env_trial) if env_trial is not None else int(data.get('trial_days', 7))
-    except Exception:
-        trial_days = 7
-    
     if not price_id:
         return jsonify({'error': 'price_id is required'}), 400
     
@@ -256,6 +249,16 @@ def create_checkout_session(team_id):
     team = Team.query.get(team_id)
     if not team:
         return jsonify({'error': 'Team not found'}), 404
+    
+    # Resolve trial days: skip trial if team has already used it
+    trial_days = 0  # Default: no trial
+    if not team.has_used_trial:
+        # Team hasn't used trial yet - allow trial period
+        env_trial = os.getenv('TRIAL_PERIOD_DAYS')
+        try:
+            trial_days = int(env_trial) if env_trial is not None else int(data.get('trial_days', 7))
+        except Exception:
+            trial_days = 7
     
     print(f"DEBUG: Found team: {team.name}, created_by: {team.created_by}")
     
@@ -289,8 +292,23 @@ def create_checkout_session(team_id):
             
         print(f"DEBUG: Success URL: {success_url}")
         print(f"DEBUG: Cancel URL: {cancel_url}")
+        print(f"DEBUG: Trial days: {trial_days}, Team has_used_trial: {team.has_used_trial}")
         
-        # Create checkout session without customer for now
+        # Build subscription_data with conditional trial_period_days
+        subscription_data = {
+            'metadata': {
+                'team_id': team_id,
+                'billing_user_id': team_owner.id,
+                'plan_id': price.plan_id,
+                'price_id': price.id
+            }
+        }
+        
+        # Only add trial_period_days if team hasn't used trial yet
+        if trial_days > 0:
+            subscription_data['trial_period_days'] = int(trial_days)
+        
+        # Create checkout session
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
@@ -306,15 +324,7 @@ def create_checkout_session(team_id):
                 'plan_id': price.plan_id,
                 'price_id': price.id
             },
-            subscription_data={
-                'metadata': {
-                    'team_id': team_id,
-                    'billing_user_id': team_owner.id,
-                    'plan_id': price.plan_id,
-                    'price_id': price.id
-                },
-                'trial_period_days': int(trial_days)
-            }
+            subscription_data=subscription_data
         )
         
         return jsonify({
@@ -446,6 +456,13 @@ def handle_subscription_created(subscription):
         local_subscription.current_period_end = datetime.fromtimestamp(cpe) if cpe else None
         local_subscription.trial_end = datetime.fromtimestamp(te) if te else None
         local_subscription.quantity = subscription.get('quantity', local_subscription.quantity or 1)
+        
+        # Mark team as having used trial if trial_end exists
+        if te:
+            team = Team.query.get(int(team_id))
+            if team and not team.has_used_trial:
+                team.has_used_trial = True
+                print(f'Marked team {team_id} as having used trial')
         
         db.session.commit()
         print(f'Subscription created/linked for team {team_id}')

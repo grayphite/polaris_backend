@@ -29,6 +29,9 @@ class Team(db.Model):
     # Soft delete flag
     is_deleted = db.Column(db.Boolean, default=False, nullable=False, index=True)
     
+    # Trial tracking
+    has_used_trial = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    
     # Relationships
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_teams')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_teams')
