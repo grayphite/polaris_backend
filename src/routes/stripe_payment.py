@@ -25,12 +25,35 @@ bp = Blueprint('stripe_payment', __name__, url_prefix='/api')
 
 @bp.route('/plans', methods=['GET'])
 def get_plans():
-    """Get all active payment plans with their prices."""
+    """Get all active payment plans with their prices.
+    
+    Optional query parameter:
+    - team_id: If provided, returns team-specific trial eligibility (has_used_trial)
+    """
+    team_id = request.args.get('team_id', type=int)
+    team = None
+    team_has_used_trial = False
+    
+    if team_id:
+        team = Team.query.get(team_id)
+        if team:
+            team_has_used_trial = team.has_used_trial
+    
     plans = PaymentPlan.query.filter_by(is_active=True, is_deleted=False).order_by(PaymentPlan.sort_order).all()
     
     result = []
     for plan in plans:
         prices = PlanPrice.query.filter_by(plan_id=plan.id, is_active=True).all()
+        
+        # Calculate trial eligibility for this team
+        env_trial = os.getenv('TRIAL_PERIOD_DAYS')
+        try:
+            default_trial_days = int(env_trial) if env_trial is not None else 7
+        except Exception:
+            default_trial_days = 7
+        
+        eligible_trial_days = 0 if team_has_used_trial else default_trial_days
+        
         result.append({
             'id': plan.id,
             'code': plan.code,
@@ -51,14 +74,21 @@ def get_plans():
                 'compare_at_cents': price.compare_at_cents,
                 'interval': price.interval,
                 'interval_count': price.interval_count,
-                'trial_days': price.trial_days,
+                'trial_days': price.trial_days,  # Default trial from plan
+                'eligible_trial_days': eligible_trial_days,  # Team-specific trial eligibility
+                'has_trial_available': eligible_trial_days > 0,  # Whether team can use trial
                 'stripe_price_id': price.stripe_price_id,
                 'per_seat_amount_cents': price.per_seat_amount_cents,
                 'per_seat_metric': price.per_seat_metric,
             } for price in prices]
         })
     
-    return jsonify({'plans': result})
+    response = {'plans': result}
+    if team_id:
+        response['team_id'] = team_id
+        response['team_has_used_trial'] = team_has_used_trial
+    
+    return jsonify(response)
 
 
 @bp.route('/subscriptions/<int:team_id>', methods=['GET'])
@@ -329,7 +359,10 @@ def create_checkout_session(team_id):
         
         return jsonify({
             'checkout_url': checkout_session.url,
-            'session_id': checkout_session.id
+            'session_id': checkout_session.id,
+            'trial_days': trial_days if trial_days > 0 else 0,
+            'has_trial': trial_days > 0,
+            'team_has_used_trial': team.has_used_trial
         })
         
     except stripe._error.StripeError as e:
