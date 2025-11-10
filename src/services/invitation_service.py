@@ -19,7 +19,7 @@ from src.models.user import User
 from src.models.audit_log import AuditLog
 from src.models.chat import Chat
 from src.models.project import Project
-from src.models.ai_chat import AIChat
+from src.models.ai_chat import AIChat, AIStats
 from src.models.documents import DocumentoUpload
 from src.models.documento_gerado import DocumentoGerado
 from src.models.cliente import Cliente
@@ -638,8 +638,14 @@ class InvitationService:
                         # 3.1.c Detach audit logs (break FK to users)
                         db.session.query(AuditLog).filter(AuditLog.user_id == invited_user.id).update({AuditLog.user_id: None}, synchronize_session=False)
 
-                        # 3.1.d AI data: clear deleted_by refs, then delete AIChat rows created by user
+                        # 3.1.d AI data: clear deleted_by refs, then delete AIStats and AIChat rows created by user
                         db.session.query(AIChat).filter(AIChat.deleted_by == invited_user.id).update({AIChat.deleted_by: None}, synchronize_session=False)
+                        # Get all AIChat IDs for this user before deletion
+                        ai_chat_ids = [ac.id for ac in AIChat.query.filter_by(user_id=invited_user.id).all()]
+                        # Delete AIStats records first (they reference ai_chats)
+                        if ai_chat_ids:
+                            AIStats.query.filter(AIStats.ai_chat_id.in_(ai_chat_ids)).delete(synchronize_session=False)
+                        # Now delete AIChat records
                         AIChat.query.filter_by(user_id=invited_user.id).delete(synchronize_session=False)
 
                         # 3.1.e Chats/Projects created by this user (cascades to AIChat via relationships)
