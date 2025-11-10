@@ -94,14 +94,29 @@ def get_plans():
 @bp.route('/subscriptions/<int:team_id>', methods=['GET'])
 def get_team_subscription(team_id):
     """Get team's active subscription details."""
-    subscription = TeamSubscription.query.filter_by(
+    # Get all active subscriptions for this team, ordered by ID (most recent first)
+    # This handles edge cases where multiple subscriptions might be marked as active
+    subscriptions = TeamSubscription.query.filter_by(
         team_id=team_id, 
         is_active=True, 
         is_deleted=False
-    ).first()
+    ).order_by(TeamSubscription.id.desc()).all()
     
-    if not subscription:
+    if not subscriptions:
         return jsonify({'error': 'No active subscription found'}), 404
+    
+    # If multiple active subscriptions found, deactivate all except the most recent one
+    if len(subscriptions) > 1:
+        print(f'Warning: Found {len(subscriptions)} active subscriptions for team {team_id}. Deactivating old ones.')
+        # Keep the first one (most recent), deactivate the rest
+        for old_sub in subscriptions[1:]:
+            old_sub.is_active = False
+            print(f'Deactivated duplicate active subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id}')
+        db.session.commit()
+        # Re-fetch to get the updated state
+        subscription = subscriptions[0]
+    else:
+        subscription = subscriptions[0]
     
     # If subscription status is incomplete, sync from Stripe to get latest status
     # This handles cases where webhooks were delayed or missed
@@ -472,6 +487,26 @@ def handle_checkout_completed(session):
     # If still not found, this is likely a new subscription (resubscription after cancel)
     # Create a new subscription record instead of updating the old canceled one
     if not subscription:
+        # IMPORTANT: Deactivate all other subscriptions for this team to ensure only one active subscription
+        if subscription_id:
+            # Deactivate all subscriptions except the new one
+            old_subscriptions = TeamSubscription.query.filter_by(
+                team_id=int(team_id),
+                is_deleted=False
+            ).filter(
+                TeamSubscription.stripe_subscription_id != subscription_id
+            ).all()
+        else:
+            # If no subscription_id yet, deactivate all existing subscriptions for this team
+            old_subscriptions = TeamSubscription.query.filter_by(
+                team_id=int(team_id),
+                is_deleted=False
+            ).all()
+        
+        for old_sub in old_subscriptions:
+            old_sub.is_active = False
+            print(f'Deactivated old subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id}')
+        
         # Always fetch actual status from Stripe to ensure accuracy
         initial_status = 'incomplete'  # Default, will be updated from Stripe
         if subscription_id:
@@ -491,7 +526,8 @@ def handle_checkout_completed(session):
             price_id=int(price_id),
             stripe_customer_id=session.get('customer'),
             stripe_subscription_id=subscription_id,
-            status=initial_status
+            status=initial_status,
+            is_active=True
         )
         
         # Set period dates if available from Stripe
@@ -509,11 +545,21 @@ def handle_checkout_completed(session):
     else:
         # Update existing subscription
         # If this is a different subscription_id, it means it's a new subscription
-        # In that case, mark old subscription as inactive and create new one
+        # In that case, mark ALL old subscriptions as inactive and create new one
         if subscription_id and subscription.stripe_subscription_id and subscription.stripe_subscription_id != subscription_id:
-            # This is a new subscription (resubscription), mark old one as inactive
-            old_subscription = subscription
-            old_subscription.is_active = False
+            # This is a new subscription (resubscription), deactivate ALL old subscriptions for this team
+            # Deactivate all subscriptions except the new one
+            old_subscriptions = TeamSubscription.query.filter_by(
+                team_id=int(team_id),
+                is_deleted=False
+            ).filter(
+                TeamSubscription.stripe_subscription_id != subscription_id
+            ).all()
+            
+            for old_sub in old_subscriptions:
+                old_sub.is_active = False
+                print(f'Deactivated old subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id}')
+            
             db.session.flush()
             
             # Create new subscription record - always fetch status from Stripe
@@ -610,6 +656,32 @@ def handle_subscription_created(subscription):
                 stripe_subscription_id=subscription.get('id')
             ).first()
         
+        # Check if this is a new subscription (different stripe_subscription_id)
+        # If so, deactivate all other subscriptions for this team
+        stripe_subscription_id = subscription.get('id')
+        is_new_subscription = False
+        
+        if local_subscription:
+            # If existing subscription has a different stripe_subscription_id, it's a new subscription
+            if local_subscription.stripe_subscription_id and local_subscription.stripe_subscription_id != stripe_subscription_id:
+                is_new_subscription = True
+        else:
+            # No local subscription found, this is definitely new
+            is_new_subscription = True
+        
+        if is_new_subscription and stripe_subscription_id:
+            # Deactivate ALL other subscriptions for this team
+            old_subscriptions = TeamSubscription.query.filter_by(
+                team_id=int(team_id),
+                is_deleted=False
+            ).filter(
+                TeamSubscription.stripe_subscription_id != stripe_subscription_id
+            ).all()
+            
+            for old_sub in old_subscriptions:
+                old_sub.is_active = False
+                print(f'Deactivated old subscription {old_sub.id} (stripe_id: {old_sub.stripe_subscription_id}) for team {team_id} in subscription.created webhook')
+        
         if not local_subscription:
             # As a safety net, create a minimal local record from metadata
             local_subscription = TeamSubscription(
@@ -617,6 +689,7 @@ def handle_subscription_created(subscription):
                 billing_user_id=int(metadata.get('billing_user_id')) if metadata.get('billing_user_id') else None,
                 plan_id=int(metadata.get('plan_id')) if metadata.get('plan_id') else None,
                 price_id=int(metadata.get('price_id')) if metadata.get('price_id') else None,
+                is_active=True
             )
             db.session.add(local_subscription)
             db.session.flush()
@@ -625,6 +698,7 @@ def handle_subscription_created(subscription):
         stripe_status = subscription.get('status', 'incomplete')
         local_subscription.stripe_subscription_id = subscription.get('id')
         local_subscription.status = stripe_status  # Always use status from Stripe
+        local_subscription.is_active = True  # Ensure new/updated subscription is active
         cps = subscription.get('current_period_start')
         cpe = subscription.get('current_period_end')
         te = subscription.get('trial_end')
