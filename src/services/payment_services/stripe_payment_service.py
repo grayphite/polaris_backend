@@ -276,6 +276,9 @@ class StripePaymentService:
         if not getattr(stripe, 'api_key', None):
             stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
+        # Check if subscription had a trial period before canceling
+        had_trial = subscription.trial_end is not None
+        
         if cancel_at_period_end:
             stripe_sub = stripe.Subscription.modify(
                 subscription.stripe_subscription_id,
@@ -296,6 +299,14 @@ class StripePaymentService:
                 subscription.current_period_end = datetime.fromtimestamp(cpe)
         except Exception:
             pass
+
+        # If subscription had a trial period (started trial), mark team as having used trial
+        # This applies even if the trial didn't complete
+        if had_trial:
+            team = Team.query.get(team_id)
+            if team and not team.has_used_trial:
+                team.has_used_trial = True
+                print(f'Marked team {team_id} as having used trial (subscription canceled during trial)')
 
         db.session.commit()
 

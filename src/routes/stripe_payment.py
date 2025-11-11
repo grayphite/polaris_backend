@@ -784,7 +784,9 @@ def handle_subscription_updated(subscription):
     
     if local_subscription:
         local_subscription.status = subscription['status']
-        local_subscription.trial_end = datetime.fromtimestamp(subscription.get('trial_end')) if subscription.get('trial_end') else None
+        # Update trial_end from Stripe subscription
+        trial_end_timestamp = subscription.get('trial_end')
+        local_subscription.trial_end = datetime.fromtimestamp(trial_end_timestamp) if trial_end_timestamp else None
         local_subscription.current_period_start = datetime.fromtimestamp(subscription['current_period_start'])
         local_subscription.current_period_end = datetime.fromtimestamp(subscription['current_period_end'])
         local_subscription.quantity = subscription.get('quantity', 1)
@@ -792,6 +794,22 @@ def handle_subscription_updated(subscription):
         
         if subscription.get('canceled_at'):
             local_subscription.canceled_at = datetime.fromtimestamp(subscription['canceled_at'])
+        
+        # If subscription status is 'canceled' and it had a trial period, mark team as having used trial
+        # This applies even if the trial didn't complete
+        # Check both local subscription and Stripe subscription object for trial_end
+        if subscription['status'] == 'canceled':
+            had_trial = False
+            if local_subscription.trial_end is not None:
+                had_trial = True
+            elif trial_end_timestamp is not None:
+                had_trial = True
+            
+            if had_trial:
+                team = Team.query.get(int(team_id))
+                if team and not team.has_used_trial:
+                    team.has_used_trial = True
+                    print(f'Marked team {team_id} as having used trial (subscription canceled during trial via update)')
         
         db.session.commit()
         print(f'Subscription updated for team {team_id}')
@@ -807,6 +825,24 @@ def handle_subscription_deleted(subscription):
         local_subscription.status = 'canceled'
         local_subscription.is_active = False  # Ensure canceled subscriptions are marked inactive
         local_subscription.canceled_at = datetime.fromtimestamp(subscription.get('canceled_at', datetime.now().timestamp()))
+        
+        # If subscription had a trial period (started trial), mark team as having used trial
+        # This applies even if the trial didn't complete
+        # Check both local subscription and Stripe subscription object for trial_end
+        had_trial = False
+        if local_subscription.trial_end is not None:
+            had_trial = True
+        elif subscription.get('trial_end') is not None:
+            had_trial = True
+            # Also update local subscription with trial_end from Stripe
+            local_subscription.trial_end = datetime.fromtimestamp(subscription['trial_end'])
+        
+        if had_trial:
+            team = Team.query.get(local_subscription.team_id)
+            if team and not team.has_used_trial:
+                team.has_used_trial = True
+                print(f'Marked team {local_subscription.team_id} as having used trial (subscription canceled during trial)')
+        
         db.session.commit()
         print(f'Subscription canceled and deactivated: {subscription["id"]}')
 
