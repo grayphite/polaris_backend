@@ -42,8 +42,8 @@ class UsageBillingService:
         plan: PaymentPlan = subscription.plan
         price: PlanPrice = subscription.price
 
-        # Count only members, excluding the team owner
-        active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
+        # Count all active members (including the team owner)
+        active_members = len([m for m in team.members if not m.is_deleted])
         included = plan.max_team_members_per_team if plan.max_team_members_per_team >= 0 else active_members
         overage = max(0, active_members - included)
 
@@ -104,8 +104,9 @@ class UsageBillingService:
         """
         Align Stripe subscription items with membership counts using a two-item model:
         - Base item (plan price) remains quantity = 1
-        - Overage item (overage price) quantity = max(0, members_excl_owner - included)
+        - Overage item (overage price) quantity = max(0, active_members - included)
         Proration is enabled so changes affect the current period.
+        Note: Team owner is included in the member count.
         """
         team = Team.query.get(team_id)
         subscription = UsageBillingService.get_active_subscription(team_id)
@@ -117,8 +118,8 @@ class UsageBillingService:
             stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
         try:
-            # Count only members, excluding the team owner
-            active_members = len([m for m in team.members if not m.is_deleted and m.user_id != team.created_by])
+            # Count all active members (including the team owner)
+            active_members = len([m for m in team.members if not m.is_deleted])
             included = subscription.plan.max_team_members_per_team if subscription.plan.max_team_members_per_team >= 0 else 0
             overage_qty = max(0, active_members - included)
 
