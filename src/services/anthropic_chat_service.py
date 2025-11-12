@@ -1401,7 +1401,7 @@ Name:"""
                 headers=headers,
                 json=payload,
                 stream=True,  # Enable streaming
-                timeout=self.streaming_timeout
+                timeout=(30, self.streaming_timeout)  # (connect_timeout, read_timeout)
             )
             
             if response.status_code != 200:
