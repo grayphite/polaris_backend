@@ -427,9 +427,11 @@ class JuridicalRAGManager:
             config = get_rag_config_values()
             k = k or config.search.default_max_results
             score_threshold = score_threshold or config.search.default_score_threshold
+            min_top_result_score = config.search.min_top_result_score
         else:
             k = k or 5
-            score_threshold = score_threshold or 0.05
+            score_threshold = score_threshold or 0.005
+            min_top_result_score = 0.3
 
         if not self.rag_available:
             logger.warning("RAG not available for search")
@@ -439,15 +441,17 @@ class JuridicalRAGManager:
             # Query embedding
             query_embedding = self.embedding_model.encode(query).tolist()
 
-            # Query ChromaDB
+            # Query ChromaDB - request more results to ensure we have enough for semantic matching
+            query_k = max(k * 2, 10)  # Request more results for better semantic matching
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=k,
+                n_results=query_k,
                 include=['documents', 'metadatas', 'distances']
             )
 
             # Process results
             relevant_docs = []
+            top_score = None
 
             if results['documents'] and results['documents'][0]:
                 documents = results['documents'][0]
@@ -456,9 +460,14 @@ class JuridicalRAGManager:
 
                 for i, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances)):
                     # Convert distance to score (smaller distance -> higher score)
+                    # For cosine similarity, distance is typically 0-2, so score ranges from 1.0 to ~0.33
                     score = 1.0 / (1.0 + distance)
+                    
+                    # Track top score for relevance check
+                    if top_score is None:
+                        top_score = score
 
-                    # Threshold filter
+                    # Threshold filter - allow lower threshold for semantic matching
                     if score >= score_threshold:
                         relevant_docs.append({
                             'text': doc,
@@ -471,8 +480,23 @@ class JuridicalRAGManager:
                             'metadata': metadata,
                             'rank': i + 1
                         })
+                        
+                        # Limit to requested k results
+                        if len(relevant_docs) >= k:
+                            break
 
-            logger.info(f"Search: '{query[:50]}...' - {len(relevant_docs)} relevant results")
+            # Semantic relevance check: Only return results if top result has meaningful relevance
+            # This prevents returning irrelevant results even with low threshold
+            if top_score is not None and top_score < min_top_result_score:
+                logger.info(f"Search: '{query[:50]}...' - Top score {top_score:.4f} below minimum {min_top_result_score}, returning no results")
+                return []
+            
+            # If we have results but top score is good, return them
+            if relevant_docs:
+                logger.info(f"Search: '{query[:50]}...' - {len(relevant_docs)} relevant results (top score: {top_score:.4f})")
+            else:
+                logger.info(f"Search: '{query[:50]}...' - No results above threshold {score_threshold} (top score: {top_score:.4f if top_score else 'N/A'})")
+            
             return relevant_docs
 
         except Exception as e:

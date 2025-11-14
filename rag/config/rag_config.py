@@ -6,9 +6,12 @@ This file contains all configuration parameters for the RAG (Retrieval-Augmented
 You can override any setting using environment variables.
 
 Environment Variables:
-- RAG_SCORE_THRESHOLD: Similarity threshold for legal/tax questions (0.01-0.5, default: 0.01)
+- RAG_SCORE_THRESHOLD: Similarity threshold for legal/tax questions (0.001-0.5, default: 0.005)
+  Lower values enable better semantic matching (allows different wordings to match)
 - RAG_GENERAL_QUESTION_THRESHOLD: Threshold for general questions (0.5-1.0, default: 0.8)
   Higher values prevent irrelevant legal document matches for non-legal questions
+- RAG_MIN_TOP_RESULT_SCORE: Minimum score for top result (0.1-0.9, default: 0.3)
+  Ensures we only return results when there's meaningful semantic relevance
 - RAG_MAX_RESULTS: Maximum search results to return (1-20)
 - RAG_MAX_DOCS: Maximum documents to include in context (1-10)
 - CHROMA_CONNECTION_TYPE: Database connection type ("local" or "cloud")
@@ -35,10 +38,11 @@ class RAGSearchConfig:
     """
     
     # Search thresholds - Controls document relevance filtering
-    default_score_threshold: float = 0.01  # Main similarity threshold for legal/tax questions (0.01=more results, 0.1=fewer but better)
+    default_score_threshold: float = 0.005  # Main similarity threshold for legal/tax questions (lower = more semantic matches, 0.005=better semantic matching)
     general_question_threshold: float = 0.8  # Very high threshold for general questions (prevents irrelevant matches)
-    min_score_threshold: float = 0.01      # Minimum allowed threshold (prevents too low values)
+    min_score_threshold: float = 0.001      # Minimum allowed threshold (allows very low for semantic matching)
     max_score_threshold: float = 0.5       # Maximum allowed threshold (prevents too high values)
+    min_top_result_score: float = 0.3      # Minimum score for top result to ensure relevance (prevents returning irrelevant results)
     
     # Search limits - Controls how many documents to retrieve
     default_max_results: int = 5           # Maximum number of search results to return
@@ -187,6 +191,13 @@ class RAGConfigManager:
             general_threshold = max(0.5, min(general_threshold, 1.0))
             config.search.general_question_threshold = general_threshold
         
+        # Minimum top result score (ensures relevance)
+        if os.getenv('RAG_MIN_TOP_RESULT_SCORE'):
+            min_top_score = float(os.getenv('RAG_MIN_TOP_RESULT_SCORE'))
+            # Validate range (0.1 to 0.9)
+            min_top_score = max(0.1, min(min_top_score, 0.9))
+            config.search.min_top_result_score = min_top_score
+        
         config.search.default_max_results = int(
             os.getenv('RAG_MAX_RESULTS', config.search.default_max_results)
         )
@@ -263,8 +274,9 @@ class RAGConfigManager:
         print(f"  Log Level: {self.config.log_level}")
         print()
         print("📊 Search Settings:")
-        print(f"  Legal/Tax Score Threshold: {self.config.search.default_score_threshold} (0.01=more results, 0.1=fewer but better)")
+        print(f"  Legal/Tax Score Threshold: {self.config.search.default_score_threshold} (lower = better semantic matching)")
         print(f"  General Question Threshold: {self.config.search.general_question_threshold} (prevents irrelevant matches)")
+        print(f"  Min Top Result Score: {self.config.search.min_top_result_score} (ensures meaningful relevance)")
         print(f"  Max Results: {self.config.search.default_max_results}")
         print(f"  Max Docs: {self.config.search.default_max_docs}")
         print()
