@@ -265,36 +265,53 @@ class AnthropicChatService:
                     context_limit=context_limit
                 )
             
-            # RAG Enhancement (if enabled)
+            # Get system prompt from prompts module
+            # Use adaptive prompt for both tax and general questions
+            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
+            
+            # Detect question type FIRST (before RAG call)
+            question_type = detect_question_type(user_question)
+            
+            # RAG Enhancement (if enabled) - Only for legal/tax questions
             rag_metadata = {}
             if use_rag:
-                try:
-                    # Use system defaults for RAG parameters
-                    rag_result = self._try_rag_enhancement(
-                        user_question=user_question,
-                        similarity_threshold=None,  # Use system default
-                        max_chunks=None,  # Use system default
-                        rag_sources=None
-                    )
-                    if rag_result['success']:
-                        # Enhance conversation context with RAG
-                        conversation_context = self._enhance_context_with_rag(
-                            conversation_context, 
-                            rag_result
+                # Only use RAG for legal or tax questions to avoid irrelevant document matches
+                if question_type in ["legal", "tax"]:
+                    try:
+                        # Use system defaults for RAG parameters (legal/tax threshold)
+                        rag_result = self._try_rag_enhancement(
+                            user_question=user_question,
+                            similarity_threshold=None,  # Use system default for legal/tax
+                            max_chunks=None,  # Use system default
+                            rag_sources=None,
+                            question_type=question_type
                         )
-                        rag_metadata = rag_result.get('metadata', {})
-                    else:
+                        if rag_result['success']:
+                            # Enhance conversation context with RAG
+                            conversation_context = self._enhance_context_with_rag(
+                                conversation_context, 
+                                rag_result
+                            )
+                            rag_metadata = rag_result.get('metadata', {})
+                        else:
+                            rag_metadata = {
+                                'rag_enabled': False,
+                                'fallback_reason': rag_result.get('error', 'RAG failed'),
+                                'processing_mode': 'fallback'
+                            }
+                    except Exception as e:
+                        self.logger.warning(f"RAG enhancement failed: {str(e)}")
                         rag_metadata = {
                             'rag_enabled': False,
-                            'fallback_reason': rag_result.get('error', 'RAG failed'),
-                            'processing_mode': 'fallback'
+                            'fallback_reason': f'RAG error: {str(e)}',
+                            'processing_mode': 'error'
                         }
-                except Exception as e:
-                    self.logger.warning(f"RAG enhancement failed: {str(e)}")
+                else:
+                    # General questions: Skip RAG to avoid irrelevant legal document matches
                     rag_metadata = {
                         'rag_enabled': False,
-                        'fallback_reason': f'RAG error: {str(e)}',
-                        'processing_mode': 'error'
+                        'fallback_reason': f'RAG skipped for {question_type} questions (only enabled for legal/tax)',
+                        'processing_mode': 'normal'
                     }
             else:
                 rag_metadata = {
@@ -303,18 +320,11 @@ class AnthropicChatService:
                     'processing_mode': 'normal'
                 }
             
-            # Get system prompt from prompts module
-            # Use adaptive prompt for both tax and general questions
-            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
-            
             # Prepare RAG sources for prompt enhancement
             rag_sources = []
             if rag_metadata and rag_metadata.get('rag_enabled'):
                 context_chunks = rag_metadata.get('context_chunks', [])
                 rag_sources = context_chunks
-            
-            # Detect question type and get adaptive system prompt
-            question_type = detect_question_type(user_question)
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
                 rag_metadata=rag_metadata,
@@ -587,10 +597,61 @@ class AnthropicChatService:
             # Use tax agent prompt for consistent tax-specific responses
             from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
             
-            # Detect question type and get adaptive system prompt
+            # Detect question type FIRST (before RAG call)
             question_type = detect_question_type(user_question)
+            
+            # RAG Enhancement (if enabled) - Only for legal/tax questions
+            rag_metadata = {}
+            if use_rag:
+                # Only use RAG for legal or tax questions to avoid irrelevant document matches
+                if question_type in ["legal", "tax"]:
+                    try:
+                        # Use system defaults for RAG parameters (legal/tax threshold)
+                        rag_result = self._try_rag_enhancement(
+                            user_question=user_question,
+                            similarity_threshold=None,  # Use system default for legal/tax
+                            max_chunks=None,  # Use system default
+                            rag_sources=None,
+                            question_type=question_type
+                        )
+                        if rag_result['success']:
+                            # Enhance conversation context with RAG
+                            conversation_context = self._enhance_context_with_rag(
+                                conversation_context, 
+                                rag_result
+                            )
+                            rag_metadata = rag_result.get('metadata', {})
+                        else:
+                            rag_metadata = {
+                                'rag_enabled': False,
+                                'fallback_reason': rag_result.get('error', 'RAG failed'),
+                                'processing_mode': 'fallback'
+                            }
+                    except Exception as e:
+                        self.logger.warning(f"RAG enhancement failed: {str(e)}")
+                        rag_metadata = {
+                            'rag_enabled': False,
+                            'fallback_reason': f'RAG error: {str(e)}',
+                            'processing_mode': 'error'
+                        }
+                else:
+                    # General questions: Skip RAG to avoid irrelevant legal document matches
+                    rag_metadata = {
+                        'rag_enabled': False,
+                        'fallback_reason': f'RAG skipped for {question_type} questions (only enabled for legal/tax)',
+                        'processing_mode': 'normal'
+                    }
+            else:
+                rag_metadata = {
+                    'rag_enabled': False,
+                    'fallback_reason': 'RAG not requested',
+                    'processing_mode': 'normal'
+                }
+            
+            # Get adaptive system prompt with RAG metadata
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
+                rag_metadata=rag_metadata,
                 question_type=question_type
             )
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
@@ -610,44 +671,6 @@ class AnthropicChatService:
             if truncation_result.messages_skipped > 0:
                 self.logger.info(f"Context truncated: {truncation_result.messages_skipped} messages skipped, "
                                f"{truncation_result.tokens_saved} tokens saved")
-            
-            # RAG Enhancement (if enabled)
-            rag_metadata = {}
-            if use_rag:
-                try:
-                    # Use system defaults for RAG parameters
-                    rag_result = self._try_rag_enhancement(
-                        user_question=user_question,
-                        similarity_threshold=None,  # Use system default
-                        max_chunks=None,  # Use system default
-                        rag_sources=None
-                    )
-                    if rag_result['success']:
-                        # Enhance conversation context with RAG
-                        conversation_context = self._enhance_context_with_rag(
-                            conversation_context, 
-                            rag_result
-                        )
-                        rag_metadata = rag_result.get('metadata', {})
-                    else:
-                        rag_metadata = {
-                            'rag_enabled': False,
-                            'fallback_reason': rag_result.get('error', 'RAG failed'),
-                            'processing_mode': 'fallback'
-                        }
-                except Exception as e:
-                    self.logger.warning(f"RAG enhancement failed: {str(e)}")
-                    rag_metadata = {
-                        'rag_enabled': False,
-                        'fallback_reason': f'RAG error: {str(e)}',
-                        'processing_mode': 'error'
-                    }
-            else:
-                rag_metadata = {
-                    'rag_enabled': False,
-                    'fallback_reason': 'RAG not requested',
-                    'processing_mode': 'normal'
-                }
             
             # Get AI response from Anthropic Claude
             anthropic_response = self._get_anthropic_response(
@@ -1699,7 +1722,8 @@ Name:"""
             }
 
     def _try_rag_enhancement(self, user_question: str, similarity_threshold: float = None, 
-                           max_chunks: int = None, rag_sources: list = None) -> Dict[str, Any]:
+                           max_chunks: int = None, rag_sources: list = None, 
+                           question_type: str = "auto") -> Dict[str, Any]:
         """
         Try to enhance context using RAG
         
@@ -1708,6 +1732,7 @@ Name:"""
             similarity_threshold: RAG similarity threshold
             max_chunks: Maximum RAG chunks
             rag_sources: Optional specific sources
+            question_type: Question type ("legal", "tax", or "general")
             
         Returns:
             Dict with RAG result and metadata
@@ -1727,15 +1752,30 @@ Name:"""
                     }
                 }
             
+            # Auto-detect question type if not provided
+            if question_type == "auto":
+                from src.prompts.adaptive_system_prompt import detect_question_type
+                question_type = detect_question_type(user_question)
+            
             # Use system defaults if parameters not provided
+            # Use different thresholds based on question type
             if similarity_threshold is None:
                 # Load from RAG config
                 try:
                     from rag.config.rag_config import get_rag_config_values
                     config = get_rag_config_values()
-                    similarity_threshold = config.search.default_score_threshold
+                    # Use high threshold for general questions to prevent irrelevant matches
+                    if question_type == "general":
+                        similarity_threshold = config.search.general_question_threshold
+                    else:
+                        # Use normal threshold for legal/tax questions
+                        similarity_threshold = config.search.default_score_threshold
                 except:
-                    similarity_threshold = 0.01  # Fallback default
+                    # Fallback defaults
+                    if question_type == "general":
+                        similarity_threshold = 0.8  # Very high threshold for general questions
+                    else:
+                        similarity_threshold = 0.01  # Normal threshold for legal/tax
             
             if max_chunks is None:
                 # Load from RAG config

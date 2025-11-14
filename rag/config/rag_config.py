@@ -6,7 +6,9 @@ This file contains all configuration parameters for the RAG (Retrieval-Augmented
 You can override any setting using environment variables.
 
 Environment Variables:
-- RAG_SCORE_THRESHOLD: Similarity threshold for document search (0.01-0.5)
+- RAG_SCORE_THRESHOLD: Similarity threshold for legal/tax questions (0.01-0.5, default: 0.01)
+- RAG_GENERAL_QUESTION_THRESHOLD: Threshold for general questions (0.5-1.0, default: 0.8)
+  Higher values prevent irrelevant legal document matches for non-legal questions
 - RAG_MAX_RESULTS: Maximum search results to return (1-20)
 - RAG_MAX_DOCS: Maximum documents to include in context (1-10)
 - CHROMA_CONNECTION_TYPE: Database connection type ("local" or "cloud")
@@ -33,7 +35,8 @@ class RAGSearchConfig:
     """
     
     # Search thresholds - Controls document relevance filtering
-    default_score_threshold: float = 0.01  # Main similarity threshold (0.01=more results, 0.1=fewer but better)
+    default_score_threshold: float = 0.01  # Main similarity threshold for legal/tax questions (0.01=more results, 0.1=fewer but better)
+    general_question_threshold: float = 0.8  # Very high threshold for general questions (prevents irrelevant matches)
     min_score_threshold: float = 0.01      # Minimum allowed threshold (prevents too low values)
     max_score_threshold: float = 0.5       # Maximum allowed threshold (prevents too high values)
     
@@ -169,9 +172,21 @@ class RAGConfigManager:
         config = RAGConfig()
         
         # Override search settings with environment variables
-        config.search.default_score_threshold = float(
-            os.getenv('RAG_SCORE_THRESHOLD', config.search.default_score_threshold)
-        )
+        # Legal/Tax question threshold
+        if os.getenv('RAG_SCORE_THRESHOLD'):
+            threshold_value = float(os.getenv('RAG_SCORE_THRESHOLD'))
+            # Validate and clamp to allowed range
+            threshold_value = max(config.search.min_score_threshold, 
+                                min(threshold_value, config.search.max_score_threshold))
+            config.search.default_score_threshold = threshold_value
+        
+        # General question threshold (separate config)
+        if os.getenv('RAG_GENERAL_QUESTION_THRESHOLD'):
+            general_threshold = float(os.getenv('RAG_GENERAL_QUESTION_THRESHOLD'))
+            # Ensure it's high enough to prevent irrelevant matches (at least 0.5)
+            general_threshold = max(0.5, min(general_threshold, 1.0))
+            config.search.general_question_threshold = general_threshold
+        
         config.search.default_max_results = int(
             os.getenv('RAG_MAX_RESULTS', config.search.default_max_results)
         )
@@ -206,6 +221,22 @@ class RAGConfigManager:
         """
         return self.config
     
+    def get_threshold_for_question_type(self, question_type: str = "legal") -> float:
+        """
+        Get the appropriate score threshold based on question type
+        
+        Args:
+            question_type: "legal", "tax", or "general"
+            
+        Returns:
+            float: The appropriate threshold value
+        """
+        if question_type == "general":
+            return self.config.search.general_question_threshold
+        else:
+            # For legal and tax questions
+            return self.config.search.default_score_threshold
+    
     def update_config(self, **kwargs) -> None:
         """
         Update configuration values programmatically
@@ -232,7 +263,8 @@ class RAGConfigManager:
         print(f"  Log Level: {self.config.log_level}")
         print()
         print("📊 Search Settings:")
-        print(f"  Score Threshold: {self.config.search.default_score_threshold}")
+        print(f"  Legal/Tax Score Threshold: {self.config.search.default_score_threshold} (0.01=more results, 0.1=fewer but better)")
+        print(f"  General Question Threshold: {self.config.search.general_question_threshold} (prevents irrelevant matches)")
         print(f"  Max Results: {self.config.search.default_max_results}")
         print(f"  Max Docs: {self.config.search.default_max_docs}")
         print()
