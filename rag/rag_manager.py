@@ -431,7 +431,7 @@ class JuridicalRAGManager:
         else:
             k = k or 5
             score_threshold = score_threshold or 0.005
-            min_top_result_score = 0.05
+            min_top_result_score = 0.01
 
         if not self.rag_available:
             logger.warning("RAG not available for search")
@@ -487,9 +487,14 @@ class JuridicalRAGManager:
 
             # Semantic relevance check: Only return results if top result has meaningful relevance
             # This prevents returning irrelevant results even with low threshold
-            if top_score is not None and top_score < min_top_result_score:
-                logger.info(f"Search: '{query[:50]}...' - Top score {top_score:.4f} below minimum {min_top_result_score}, returning no results")
+            # Only reject if top score is extremely low (indicating completely irrelevant) AND we have no results
+            # This allows semantic matches even if scores are lower
+            if top_score is not None and top_score < min_top_result_score and len(relevant_docs) == 0:
+                logger.info(f"Search: '{query[:50]}...' - Top score {top_score:.4f} below minimum {min_top_result_score} and no results, returning no results")
                 return []
+            # If we have results that passed the threshold, return them even if top_score is low (semantic matching)
+            elif top_score is not None and top_score < min_top_result_score and len(relevant_docs) > 0:
+                logger.info(f"Search: '{query[:50]}...' - Top score {top_score:.4f} below minimum but {len(relevant_docs)} results passed threshold, returning results (semantic match)")
             
             # If we have results but top score is good, return them
             if relevant_docs:

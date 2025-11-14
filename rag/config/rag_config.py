@@ -10,7 +10,7 @@ Environment Variables:
   Lower values enable better semantic matching (allows different wordings to match)
 - RAG_GENERAL_QUESTION_THRESHOLD: Threshold for general questions (0.5-1.0, default: 0.8)
   Higher values prevent irrelevant legal document matches for non-legal questions
-- RAG_MIN_TOP_RESULT_SCORE: Minimum score for top result (0.05-0.9, default: 0.05)
+- RAG_MIN_TOP_RESULT_SCORE: Minimum score for top result (0.01-0.9, default: 0.01)
   Ensures we only return results when there's meaningful semantic relevance (lower = more permissive for semantic matching)
 - RAG_MAX_RESULTS: Maximum search results to return (1-20)
 - RAG_MAX_DOCS: Maximum documents to include in context (1-10)
@@ -42,7 +42,7 @@ class RAGSearchConfig:
     general_question_threshold: float = 0.8  # Very high threshold for general questions (prevents irrelevant matches)
     min_score_threshold: float = 0.001      # Minimum allowed threshold (allows very low for semantic matching)
     max_score_threshold: float = 0.5       # Maximum allowed threshold (prevents too high values)
-    min_top_result_score: float = 0.05     # Minimum score for top result to ensure relevance (very permissive for semantic matching)
+    min_top_result_score: float = 0.01    # Minimum score for top result to ensure relevance (2x default threshold, good for semantic matching)
     
     # Search limits - Controls how many documents to retrieve
     default_max_results: int = 5           # Maximum number of search results to return
@@ -194,8 +194,8 @@ class RAGConfigManager:
         # Minimum top result score (ensures relevance)
         if os.getenv('RAG_MIN_TOP_RESULT_SCORE'):
             min_top_score = float(os.getenv('RAG_MIN_TOP_RESULT_SCORE'))
-            # Validate range (0.05 to 0.9) - very permissive for semantic matching
-            min_top_score = max(0.05, min(min_top_score, 0.9))
+            # Validate range (0.01 to 0.9) - ensures meaningful relevance while allowing semantic matching
+            min_top_score = max(0.01, min(min_top_score, 0.9))
             config.search.min_top_result_score = min_top_score
         
         config.search.default_max_results = int(
