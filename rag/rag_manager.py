@@ -431,7 +431,7 @@ class JuridicalRAGManager:
         else:
             k = k or 5
             score_threshold = score_threshold or 0.005
-            min_top_result_score = 0.15
+            min_top_result_score = 0.05
 
         if not self.rag_available:
             logger.warning("RAG not available for search")
