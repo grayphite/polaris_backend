@@ -10,8 +10,8 @@ Environment Variables:
   Lower values enable better semantic matching (allows different wordings to match)
 - RAG_GENERAL_QUESTION_THRESHOLD: Threshold for general questions (0.5-1.0, default: 0.8)
   Higher values prevent irrelevant legal document matches for non-legal questions
-- RAG_MIN_TOP_RESULT_SCORE: Minimum score for top result (0.1-0.9, default: 0.3)
-  Ensures we only return results when there's meaningful semantic relevance
+- RAG_MIN_TOP_RESULT_SCORE: Minimum score for top result (0.1-0.9, default: 0.15)
+  Ensures we only return results when there's meaningful semantic relevance (lower = more permissive for semantic matching)
 - RAG_MAX_RESULTS: Maximum search results to return (1-20)
 - RAG_MAX_DOCS: Maximum documents to include in context (1-10)
 - CHROMA_CONNECTION_TYPE: Database connection type ("local" or "cloud")
@@ -42,7 +42,7 @@ class RAGSearchConfig:
     general_question_threshold: float = 0.8  # Very high threshold for general questions (prevents irrelevant matches)
     min_score_threshold: float = 0.001      # Minimum allowed threshold (allows very low for semantic matching)
     max_score_threshold: float = 0.5       # Maximum allowed threshold (prevents too high values)
-    min_top_result_score: float = 0.3      # Minimum score for top result to ensure relevance (prevents returning irrelevant results)
+    min_top_result_score: float = 0.15     # Minimum score for top result to ensure relevance (lower allows better semantic matching)
     
     # Search limits - Controls how many documents to retrieve
     default_max_results: int = 5           # Maximum number of search results to return
