@@ -673,6 +673,23 @@ def handle_checkout_completed(session):
     
     db.session.commit()
     print(f'Checkout completed for team {team_id}, payment_status: {payment_status}, status: {subscription.status}')
+    
+    # CRITICAL: Sync subscription quantity with current team member count to apply overage billing
+    # This ensures that if a team has more members than the plan allows (e.g., 5 members when plan allows 2),
+    # the overage billing is applied immediately upon subscription creation/resumption
+    if subscription and subscription.is_active and subscription.stripe_subscription_id:
+        try:
+            print(f'Syncing subscription quantity with current team member count for team {team_id}...')
+            sync_success = UsageBillingService.sync_subscription_quantity_with_stripe(int(team_id))
+            if sync_success:
+                print(f'✓ Successfully synced subscription quantity with overage billing for team {team_id}')
+            else:
+                print(f'⚠ Warning: Could not sync subscription quantity for team {team_id} (subscription may not be ready yet)')
+        except Exception as e:
+            # Don't fail the webhook if sync fails - log and continue
+            print(f'⚠ Error syncing subscription quantity for team {team_id}: {e}')
+            import traceback
+            traceback.print_exc()
 
 
 def handle_subscription_created(subscription):
@@ -763,6 +780,23 @@ def handle_subscription_created(subscription):
         
         db.session.commit()
         print(f'Subscription created/linked for team {team_id}, status: {local_subscription.status}')
+        
+        # CRITICAL: Sync subscription quantity with current team member count to apply overage billing
+        # This ensures that if a team has more members than the plan allows (e.g., 5 members when plan allows 2),
+        # the overage billing is applied immediately upon subscription creation/resumption
+        if local_subscription and local_subscription.is_active and local_subscription.stripe_subscription_id:
+            try:
+                print(f'Syncing subscription quantity with current team member count for team {team_id}...')
+                sync_success = UsageBillingService.sync_subscription_quantity_with_stripe(int(team_id))
+                if sync_success:
+                    print(f'✓ Successfully synced subscription quantity with overage billing for team {team_id}')
+                else:
+                    print(f'⚠ Warning: Could not sync subscription quantity for team {team_id} (subscription may not be ready yet)')
+            except Exception as e:
+                # Don't fail the webhook if sync fails - log and continue
+                print(f'⚠ Error syncing subscription quantity for team {team_id}: {e}')
+                import traceback
+                traceback.print_exc()
     except Exception as e:
         db.session.rollback()
         print(f'ERROR in handle_subscription_created: {e}')
@@ -876,6 +910,24 @@ def handle_payment_succeeded(invoice):
             
             db.session.commit()
             print(f'Payment succeeded for subscription: {subscription_id}, status updated to: {local_subscription.status}')
+            
+            # CRITICAL: Sync subscription quantity with current team member count to apply overage billing
+            # This ensures that when payment succeeds (especially for resubscriptions), overage billing is applied
+            # if the team has more members than the plan allows
+            if local_subscription and local_subscription.is_active and local_subscription.stripe_subscription_id:
+                try:
+                    team_id = local_subscription.team_id
+                    print(f'Syncing subscription quantity with current team member count for team {team_id} after payment success...')
+                    sync_success = UsageBillingService.sync_subscription_quantity_with_stripe(team_id)
+                    if sync_success:
+                        print(f'✓ Successfully synced subscription quantity with overage billing for team {team_id} after payment')
+                    else:
+                        print(f'⚠ Warning: Could not sync subscription quantity for team {team_id} after payment')
+                except Exception as e:
+                    # Don't fail the webhook if sync fails - log and continue
+                    print(f'⚠ Error syncing subscription quantity for team {local_subscription.team_id} after payment: {e}')
+                    import traceback
+                    traceback.print_exc()
 
 
 def handle_payment_failed(invoice):
