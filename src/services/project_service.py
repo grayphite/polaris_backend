@@ -407,7 +407,38 @@ class ProjectService:
                 error_out=False
             )
             
-            projects = [project.to_summary_dict() for project in pagination.items]
+            # Build projects list with user role
+            projects = []
+            project_ids = [p.id for p in pagination.items]
+            
+            # Pre-fetch all ProjectMember records for these projects and this user
+            # This is more efficient than querying for each project individually
+            project_members = {}
+            if project_ids:
+                project_members = {
+                    pm.project_id: pm.role 
+                    for pm in ProjectMember.query.filter(
+                        ProjectMember.project_id.in_(project_ids),
+                        ProjectMember.user_id == user_id,
+                        ProjectMember.is_deleted == False
+                    ).all()
+                }
+            
+            for project in pagination.items:
+                project_dict = project.to_summary_dict()
+                
+                # Determine user's role in this project
+                if project.created_by == user_id:
+                    # User created the project, so they are the owner
+                    project_dict['user_role'] = 'owner'
+                elif project.id in project_members:
+                    # User is a member, get role from ProjectMember
+                    project_dict['user_role'] = project_members[project.id]
+                else:
+                    # Fallback (shouldn't happen based on query logic, but safe to handle)
+                    project_dict['user_role'] = None
+                
+                projects.append(project_dict)
             
             return {
                 'success': True,
