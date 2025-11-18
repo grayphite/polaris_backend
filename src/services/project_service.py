@@ -316,7 +316,28 @@ class ProjectService:
                     # If creator is not in the team, deny access under this filter
                     return None
             
-            return project.to_dict()
+            # Get project dictionary
+            project_dict = project.to_dict()
+            
+            # Determine user's role in this project
+            if project.created_by == user_id:
+                # User created the project, so they are the owner
+                project_dict['user_role'] = 'owner'
+            else:
+                # Check if user is a member and get their role
+                project_member = ProjectMember.query.filter_by(
+                    project_id=project_id,
+                    user_id=user_id,
+                    is_deleted=False
+                ).first()
+                
+                if project_member:
+                    project_dict['user_role'] = project_member.role
+                else:
+                    # Fallback (shouldn't happen based on access check above, but safe to handle)
+                    project_dict['user_role'] = None
+            
+            return project_dict
             
         except Exception as e:
             error_msg = f"Error fetching project: {str(e)}"
