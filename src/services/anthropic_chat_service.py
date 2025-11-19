@@ -18,6 +18,7 @@ from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.ai_chat import AIChat, AIStats
 from src.models.chat import Chat
+from src.models.chat_reference import ChatReference
 from src.models.project import ProjectMember
 from src.models.user import User
 from src.services.tokenizer_service import tokenizer_service
@@ -161,7 +162,7 @@ class AnthropicChatService:
     def create_ai_chat_stream(self, chat_id: int, user_id: int, user_question: str,
                              conversation_context: str = None, context_limit: int = 10, 
                              file_references: list = None, file_reference_details: list = None,
-                             use_rag: bool = False):
+                             use_rag: bool = False, referenced_chat_id: int = None):
         """
         Create a streaming AI chat conversation
         
@@ -257,6 +258,39 @@ class AnthropicChatService:
                 }
                 return
             
+            # Handle referenced chat if provided
+            referenced_chat_summary = None
+            referenced_chat_name = None
+            if referenced_chat_id:
+                # Validate reference access
+                if not self._verify_chat_reference_access(referenced_chat_id, chat_id, user_id):
+                    yield {
+                        "type": "error",
+                        "error": {
+                            "type": "validation_error",
+                            "message": "Invalid chat reference: chat not found, access denied, or chats belong to different projects"
+                        }
+                    }
+                    return
+                
+                # Get or generate summary (lazy generation)
+                chat_reference = self.get_or_generate_summary(referenced_chat_id, user_id)
+                if chat_reference:
+                    referenced_chat_summary = chat_reference.summary
+                    # Get referenced chat name
+                    referenced_chat = Chat.query.get(referenced_chat_id)
+                    if referenced_chat:
+                        referenced_chat_name = referenced_chat.name
+                else:
+                    yield {
+                        "type": "error",
+                        "error": {
+                            "type": "summary_generation_error",
+                            "message": "Failed to generate summary for referenced chat"
+                        }
+                    }
+                    return
+            
             # Generate previous context if not provided
             if not conversation_context:
                 conversation_context = self.generate_previous_context(
@@ -325,15 +359,35 @@ class AnthropicChatService:
             if rag_metadata and rag_metadata.get('rag_enabled'):
                 context_chunks = rag_metadata.get('context_chunks', [])
                 rag_sources = context_chunks
+            
+            # Get system prompt with referenced chat summary (if provided)
+            # The system prompt will handle adding the referenced chat summary separately
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
                 rag_metadata=rag_metadata,
-                question_type=question_type
+                question_type=question_type,
+                referenced_chat_summary=referenced_chat_summary,
+                referenced_chat_name=referenced_chat_name
             )
+            
+            # For token calculation, we need to account for both current context and referenced summary
+            # The system prompt already includes both, so we pass the combined context for accurate token counting
+            # But we'll use conversation_context (current chat only) in the actual API call
+            # since the system prompt handles the referenced chat summary separately
+            final_conversation_context = conversation_context
+            if referenced_chat_summary and referenced_chat_name:
+                # Combine for token calculation accuracy
+                combined_for_tokens = self.combine_chat_contexts(
+                    conversation_context,
+                    referenced_chat_summary,
+                    referenced_chat_name
+                )
+            else:
+                combined_for_tokens = conversation_context
             
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
-                context=conversation_context,
+                context=combined_for_tokens,
                 file_references=file_references,
                 model=self.model,
                 system_prompt=system_context
@@ -379,12 +433,14 @@ class AnthropicChatService:
             model_info = None
             request_id = None
             
+            # Pass the system prompt with referenced chat summary to the streaming method
             for event in self._get_anthropic_response_stream(
                 user_question,
                 self.model,
                 optimized_context,
                 file_references,
-                file_reference_details=file_reference_details
+                file_reference_details=file_reference_details,
+                system_prompt=system_context  # Pass the system prompt that includes referenced chat summary
             ):
                 # Handle different event types
                 if event.get("type") == "error":
@@ -438,6 +494,7 @@ class AnthropicChatService:
                     conversation_context=conversation_context,
                     file_references=json.dumps(file_references) if file_references else None,
                     file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
+                    referenced_chat_id=referenced_chat_id,
                     context_metadata={
                         'api_version': '2023-06-01',
                         'request_timestamp': datetime.now(timezone.utc).isoformat(),
@@ -519,7 +576,7 @@ class AnthropicChatService:
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
                       conversation_context: str = None, context_limit: int = 10, 
                       file_references: list = None, file_reference_details: list = None,
-                      use_rag: bool = False) -> AIChatResult:
+                      use_rag: bool = False, referenced_chat_id: int = None) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -585,6 +642,31 @@ class AnthropicChatService:
                     error="file_references must be a list of file IDs"
                 )
             
+            # Handle referenced chat if provided
+            referenced_chat_summary = None
+            referenced_chat_name = None
+            if referenced_chat_id:
+                # Validate reference access
+                if not self._verify_chat_reference_access(referenced_chat_id, chat_id, user_id):
+                    return AIChatResult(
+                        success=False,
+                        error="Invalid chat reference: chat not found, access denied, or chats belong to different projects"
+                    )
+                
+                # Get or generate summary (lazy generation)
+                chat_reference = self.get_or_generate_summary(referenced_chat_id, user_id)
+                if chat_reference:
+                    referenced_chat_summary = chat_reference.summary
+                    # Get referenced chat name
+                    referenced_chat = Chat.query.get(referenced_chat_id)
+                    if referenced_chat:
+                        referenced_chat_name = referenced_chat.name
+                else:
+                    return AIChatResult(
+                        success=False,
+                        error="Failed to generate summary for referenced chat"
+                    )
+            
             # Generate previous context if not provided
             if not conversation_context:
                 conversation_context = self.generate_previous_context(
@@ -648,15 +730,27 @@ class AnthropicChatService:
                     'processing_mode': 'normal'
                 }
             
-            # Get adaptive system prompt with RAG metadata
+            # Get adaptive system prompt with RAG metadata and referenced chat summary
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
                 rag_metadata=rag_metadata,
-                question_type=question_type
+                question_type=question_type,
+                referenced_chat_summary=referenced_chat_summary,
+                referenced_chat_name=referenced_chat_name
             )
+            
+            # Combine contexts for token calculation accuracy
+            combined_for_tokens = conversation_context
+            if referenced_chat_summary and referenced_chat_name:
+                combined_for_tokens = self.combine_chat_contexts(
+                    conversation_context,
+                    referenced_chat_summary,
+                    referenced_chat_name
+                )
+            
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
-                context=conversation_context,
+                context=combined_for_tokens,
                 file_references=file_references,
                 model=self.model,
                 system_prompt=system_context
@@ -673,12 +767,14 @@ class AnthropicChatService:
                                f"{truncation_result.tokens_saved} tokens saved")
             
             # Get AI response from Anthropic Claude
+            # Pass the system prompt that includes referenced chat summary
             anthropic_response = self._get_anthropic_response(
                 user_question,
                 self.model,
                 optimized_context,
                 file_references,
-                file_reference_details=file_reference_details
+                file_reference_details=file_reference_details,
+                system_prompt=system_context  # Pass the system prompt that includes referenced chat summary
             )
             
             if not anthropic_response.success:
@@ -712,6 +808,7 @@ class AnthropicChatService:
                 conversation_context=conversation_context,
                 file_references=json.dumps(file_references) if file_references else None,
                 file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
+                referenced_chat_id=referenced_chat_id,
                 context_metadata={
                     'api_version': '2023-06-01',
                     'request_timestamp': datetime.now(timezone.utc).isoformat(),
@@ -1298,7 +1395,8 @@ Name:"""
 
     def _get_anthropic_response_stream(self, user_question: str, model: str = "claude-sonnet-4-5-20250929",
                                       conversation_context: str = None, file_references: list = None,
-                                      file_reference_details: Optional[List[Dict]] = None):
+                                      file_reference_details: Optional[List[Dict]] = None,
+                                      system_prompt: Optional[str] = None):
         """
         Get streaming response from Anthropic Claude API using Server-Sent Events (SSE)
         
@@ -1327,15 +1425,19 @@ Name:"""
         try:
             start_time = time.time()
             
-            # Get system prompt from prompts module
-            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
-            
-            # Get system prompt
-            question_type = detect_question_type(user_question)
-            system_context = get_adaptive_system_prompt(
-                conversation_context=conversation_context,
-                question_type=question_type
-            )
+            # Use provided system prompt or generate one
+            if system_prompt:
+                system_context = system_prompt
+            else:
+                # Get system prompt from prompts module (fallback)
+                from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
+                
+                # Get system prompt
+                question_type = detect_question_type(user_question)
+                system_context = get_adaptive_system_prompt(
+                    conversation_context=conversation_context,
+                    question_type=question_type
+                )
 
             # Build the user message content
             if conversation_context:
@@ -1404,10 +1506,13 @@ Name:"""
                 "text": full_prompt
             })
             
+            # Determine max_tokens: use model-specific limit
+            effective_max_tokens = min(self._get_model_max_tokens(model), self.max_tokens)
+            
             # Prepare payload with streaming enabled
             payload = {
                 "model": model,
-                "max_tokens": self.max_tokens,
+                "max_tokens": effective_max_tokens,
                 "system": system_context,
                 "messages": [
                     {
@@ -1518,9 +1623,33 @@ Name:"""
                 }
             }
 
+    def _get_model_max_tokens(self, model: str) -> int:
+        """
+        Get the maximum output tokens for a specific model
+        
+        Args:
+            model: Model name (e.g., "claude-3-haiku-20240307")
+            
+        Returns:
+            Maximum output tokens for the model
+        """
+        # Model-specific max output tokens
+        model_limits = {
+            "claude-3-haiku-20240307": 4096,
+            "claude-3-5-sonnet-20241022": 8192,
+            "claude-sonnet-4-5-20250929": 8192,
+            "claude-3-opus-20240229": 4096,
+        }
+        
+        # Default to class max_tokens if model not found, but cap at known limits
+        default_max = min(self.max_tokens, 8192)
+        return model_limits.get(model, default_max)
+
     def _get_anthropic_response(self, user_question: str, model: str = "claude-3-haiku-20240307",
                                conversation_context: str = None, file_references: list = None,
-                               file_reference_details: Optional[List[Dict]] = None) -> AnthropicResponse:
+                               file_reference_details: Optional[List[Dict]] = None,
+                               system_prompt: Optional[str] = None,
+                               max_tokens: Optional[int] = None) -> AnthropicResponse:
         """
         Get response from Anthropic Claude API
         
@@ -1544,15 +1673,19 @@ Name:"""
         try:
             start_time = time.time()
             
-            # Get system prompt from prompts module
-            from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
-            
-            # Get system prompt
-            question_type = detect_question_type(user_question)
-            system_context = get_adaptive_system_prompt(
-                conversation_context=conversation_context,
-                question_type=question_type
-            )
+            # Use provided system prompt or generate one
+            if system_prompt:
+                system_context = system_prompt
+            else:
+                # Get system prompt from prompts module (fallback)
+                from src.prompts.adaptive_system_prompt import get_adaptive_system_prompt, detect_question_type
+                
+                # Get system prompt
+                question_type = detect_question_type(user_question)
+                system_context = get_adaptive_system_prompt(
+                    conversation_context=conversation_context,
+                    question_type=question_type
+                )
 
             # Build the user message content (no system text embedded)
             if conversation_context:
@@ -1626,10 +1759,16 @@ Name:"""
                 "text": full_prompt
             })
             
+            # Determine max_tokens: use provided value, or model-specific limit, or class default
+            if max_tokens is not None:
+                effective_max_tokens = max_tokens
+            else:
+                effective_max_tokens = min(self._get_model_max_tokens(model), self.max_tokens)
+            
             # Prepare payload
             payload = {
                 "model": model,
-                "max_tokens": self.max_tokens,
+                "max_tokens": effective_max_tokens,
                 "system": system_context,
                 "messages": [
                     {
@@ -1685,6 +1824,243 @@ Name:"""
                 success=False,
                 error=error_msg
             )
+
+    def _verify_chat_reference_access(self, referenced_chat_id: int, current_chat_id: int, user_id: int) -> bool:
+        """
+        Verify that a chat can be referenced from another chat
+        
+        Args:
+            referenced_chat_id: ID of the chat to be referenced
+            current_chat_id: ID of the current chat
+            user_id: ID of the user requesting the reference
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            # Cannot reference the same chat
+            if referenced_chat_id == current_chat_id:
+                self.logger.warning(f"User {user_id} attempted to reference same chat {current_chat_id}")
+                return False
+            
+            # Get both chats
+            referenced_chat = Chat.query.filter_by(
+                id=referenced_chat_id,
+                is_deleted=False
+            ).first()
+            
+            current_chat = Chat.query.filter_by(
+                id=current_chat_id,
+                is_deleted=False
+            ).first()
+            
+            if not referenced_chat or not current_chat:
+                self.logger.warning(f"One or both chats not found: referenced={referenced_chat_id}, current={current_chat_id}")
+                return False
+            
+            # Both chats must belong to same project
+            if referenced_chat.project_id != current_chat.project_id:
+                self.logger.warning(f"Chats belong to different projects: referenced={referenced_chat.project_id}, current={current_chat.project_id}")
+                return False
+            
+            # Verify user has access to both chats
+            if not self._verify_chat_access(referenced_chat_id, user_id):
+                self.logger.warning(f"User {user_id} does not have access to referenced chat {referenced_chat_id}")
+                return False
+            
+            if not self._verify_chat_access(current_chat_id, user_id):
+                self.logger.warning(f"User {user_id} does not have access to current chat {current_chat_id}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error verifying chat reference access: {str(e)}")
+            return False
+
+    def generate_chat_summary(self, referenced_chat_id: int, user_id: int, force_refresh: bool = False):
+        """
+        Generate or refresh a summary for a referenced chat
+        
+        Args:
+            referenced_chat_id: ID of the chat to summarize
+            user_id: ID of the user requesting the summary
+            force_refresh: If True, regenerate even if summary exists
+            
+        Returns:
+            ChatReference object or None if error
+        """
+        try:
+            self._ensure_initialized()
+            
+            if not self.api_key:
+                self.logger.error("Anthropic API key not configured for summary generation")
+                return None
+            
+            # Check if summary already exists
+            chat_reference = ChatReference.query.filter_by(referenced_chat_id=referenced_chat_id).first()
+            
+            if chat_reference and not force_refresh:
+                # Return existing summary
+                return chat_reference
+            
+            # Fetch all AIChat messages from referenced chat
+            ai_chats = AIChat.query.filter_by(
+                chat_id=referenced_chat_id,
+                is_deleted=False
+            ).order_by(AIChat.created_at.asc()).all()
+            
+            if not ai_chats:
+                self.logger.warning(f"No messages found in referenced chat {referenced_chat_id}")
+                # Create empty summary record
+                if not chat_reference:
+                    chat_reference = ChatReference(
+                        referenced_chat_id=referenced_chat_id,
+                        summary="No messages found in this chat.",
+                        summary_model="claude-3-haiku-20240307",
+                        summary_tokens=0,
+                        referenced_chat_message_count=0,
+                        last_message_id_included=None,
+                        created_by=user_id
+                    )
+                    db.session.add(chat_reference)
+                    db.session.commit()
+                return chat_reference
+            
+            # Format conversation history
+            conversation_parts = []
+            for ai_chat in ai_chats:
+                if ai_chat.user_question:
+                    conversation_parts.append(f"Human: {ai_chat.user_question}")
+                if ai_chat.ai_answer:
+                    conversation_parts.append(f"Assistant: {ai_chat.ai_answer}")
+            
+            conversation_text = "\n\n".join(conversation_parts)
+            
+            # Build summary generation prompt
+            summary_prompt = f"""You are summarizing a previous chat conversation. Create a concise summary that captures:
+- Key topics and questions discussed
+- Important decisions, conclusions, or findings
+- Relevant legal/tax terminology and concepts
+- Context that would be useful for future questions
+
+Format the summary as:
+1. Main Topics: [list key topics]
+2. Key Findings: [important conclusions]
+3. Relevant Context: [background information]
+4. Important Details: [specific details that might be referenced later]
+
+Keep the summary between 200-500 tokens. Focus on information that would help answer follow-up questions about this chat.
+
+Previous conversation:
+{conversation_text}"""
+            
+            # Call Anthropic API (non-streaming, use cheaper model)
+            summary_model = "claude-3-haiku-20240307"
+            anthropic_response = self._get_anthropic_response(
+                user_question=summary_prompt,
+                model=summary_model,
+                conversation_context=None,
+                file_references=None,
+                file_reference_details=None
+            )
+            
+            if not anthropic_response.success:
+                self.logger.error(f"Failed to generate summary for chat {referenced_chat_id}: {anthropic_response.error}")
+                return None
+            
+            summary_text = anthropic_response.content
+            summary_tokens = anthropic_response.usage.get('output_tokens', 0) if anthropic_response.usage else 0
+            last_message_id = ai_chats[-1].id if ai_chats else None
+            
+            # Create or update ChatReference
+            if chat_reference:
+                # Update existing
+                chat_reference.summary = summary_text
+                chat_reference.summary_model = summary_model
+                chat_reference.summary_tokens = summary_tokens
+                chat_reference.referenced_chat_message_count = len(ai_chats)
+                chat_reference.last_message_id_included = last_message_id
+                chat_reference.last_refreshed_by = user_id
+                chat_reference.updated_at = datetime.now(timezone.utc)
+            else:
+                # Create new
+                chat_reference = ChatReference(
+                    referenced_chat_id=referenced_chat_id,
+                    summary=summary_text,
+                    summary_model=summary_model,
+                    summary_tokens=summary_tokens,
+                    referenced_chat_message_count=len(ai_chats),
+                    last_message_id_included=last_message_id,
+                    created_by=user_id
+                )
+                db.session.add(chat_reference)
+            
+            db.session.commit()
+            
+            self.logger.info(f"Generated summary for chat {referenced_chat_id}: {len(summary_text)} chars, {summary_tokens} tokens")
+            return chat_reference
+            
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error generating chat summary: {str(e)}"
+            self.logger.error(error_msg)
+            return None
+
+    def refresh_chat_summary(self, referenced_chat_id: int, user_id: int):
+        """
+        Refresh an existing chat summary
+        
+        Args:
+            referenced_chat_id: ID of the chat to refresh summary for
+            user_id: ID of the user requesting refresh
+            
+        Returns:
+            ChatReference object or None if error
+        """
+        return self.generate_chat_summary(referenced_chat_id, user_id, force_refresh=True)
+
+    def get_or_generate_summary(self, referenced_chat_id: int, user_id: int):
+        """
+        Get existing summary or generate new one (lazy generation)
+        
+        Args:
+            referenced_chat_id: ID of the chat to get summary for
+            user_id: ID of the user requesting summary
+            
+        Returns:
+            ChatReference object or None if error
+        """
+        # Check if summary exists
+        chat_reference = ChatReference.query.filter_by(referenced_chat_id=referenced_chat_id).first()
+        
+        if chat_reference:
+            return chat_reference
+        
+        # Generate new summary (lazy generation)
+        return self.generate_chat_summary(referenced_chat_id, user_id, force_refresh=False)
+
+    def combine_chat_contexts(self, current_chat_context: str, referenced_chat_summary: str, referenced_chat_name: str) -> str:
+        """
+        Combine current chat context with referenced chat summary
+        
+        Args:
+            current_chat_context: Previous conversation context from current chat
+            referenced_chat_summary: Summary of referenced chat
+            referenced_chat_name: Name of the referenced chat
+            
+        Returns:
+            Combined context string
+        """
+        combined = "=== CURRENT CHAT CONTEXT ===\n"
+        combined += current_chat_context if current_chat_context else "(No previous context)"
+        combined += "\n=== END CURRENT CHAT CONTEXT ===\n\n"
+        combined += f"=== REFERENCED CHAT: {referenced_chat_name} ===\n"
+        combined += "The following is a summary of a referenced chat that the user wants to use as context for their current question:\n\n"
+        combined += referenced_chat_summary
+        combined += "\n\n=== END REFERENCED CHAT ===\n"
+        
+        return combined
 
     def health_check(self) -> Dict:
         """

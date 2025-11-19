@@ -411,7 +411,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_id']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -436,6 +436,15 @@ def send_message():
         except (ValueError, TypeError):
             return jsonify({'error': 'context_limit must be a valid integer'}), 400
     
+    # Validate referenced_chat_id if provided
+    referenced_chat_id = data.get('referenced_chat_id')
+    if referenced_chat_id is not None:
+        try:
+            referenced_chat_id = int(referenced_chat_id)
+            # Additional validation will be done in service layer
+        except (ValueError, TypeError):
+            return jsonify({'error': 'referenced_chat_id must be a valid integer'}), 400
+    
     # Create AI chat via service (this will also send to Anthropic)
     result = anthropic_chat_service.create_ai_chat(
         chat_id=data['chat_id'],
@@ -445,7 +454,8 @@ def send_message():
         context_limit=context_limit,
         file_references=data.get('file_references'),
         file_reference_details=data.get('file_reference_details'),
-        use_rag=data.get('use_rag', False)
+        use_rag=data.get('use_rag', False),
+        referenced_chat_id=referenced_chat_id
     )
     
     if not result.success:
@@ -489,7 +499,7 @@ def send_message():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_id']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat_stream")
@@ -515,6 +525,15 @@ def send_message_stream():
                 return jsonify({'error': 'context_limit must be between 1 and 50'}), 400
         except (ValueError, TypeError):
             return jsonify({'error': 'context_limit must be a valid integer'}), 400
+    
+    # Validate referenced_chat_id if provided
+    referenced_chat_id = data.get('referenced_chat_id')
+    if referenced_chat_id is not None:
+        try:
+            referenced_chat_id = int(referenced_chat_id)
+            # Additional validation will be done in service layer
+        except (ValueError, TypeError):
+            return jsonify({'error': 'referenced_chat_id must be a valid integer'}), 400
     
     # Production-grade rate limiting (aligned with Anthropic's capabilities)
     rate_limit_key = f"ai_chat_stream_rate_limit_{current_user.id}"
@@ -572,7 +591,8 @@ def send_message_stream():
                 context_limit=context_limit,
                 file_references=data.get('file_references'),
                 file_reference_details=data.get('file_reference_details'),
-                use_rag=data.get('use_rag', False)
+                use_rag=data.get('use_rag', False),
+                referenced_chat_id=referenced_chat_id
             ):
                 # Add stream metadata to each event
                 event['stream_id'] = stream_id
@@ -709,6 +729,64 @@ def send_message_stream():
         mimetype='text/event-stream',
         headers=headers
     )
+
+
+@anthropic_chat_bp.route('/ai-chats/refresh-chat-summary', methods=['POST'])
+@auth_service.require_auth
+@validate_request_data(
+    required_fields=['referenced_chat_id'],
+    optional_fields=[]
+)
+@handle_errors
+@log_action(ActionType.UPDATE, "chat_reference")
+def refresh_chat_summary():
+    """
+    Refresh the summary for a referenced chat
+    
+    This endpoint allows users to manually refresh the AI-generated summary
+    of a referenced chat, useful when new messages have been added to the referenced chat.
+    
+    Returns:
+        Updated chat reference summary data
+    """
+    current_user = get_current_user()
+    data = request.validated_data
+    referenced_chat_id = data['referenced_chat_id']
+    
+    # Validate referenced_chat_id
+    try:
+        referenced_chat_id = int(referenced_chat_id)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'referenced_chat_id must be a valid integer'}), 400
+    
+    # Verify user has access to referenced chat
+    if not anthropic_chat_service._verify_chat_access(referenced_chat_id, current_user.id):
+        return jsonify({'error': 'Chat not found or access denied'}), 404
+    
+    # Refresh the summary
+    chat_reference = anthropic_chat_service.refresh_chat_summary(referenced_chat_id, current_user.id)
+    
+    if not chat_reference:
+        return jsonify({'error': 'Failed to refresh chat summary'}), 500
+    
+    # Log the refresh
+    logging_service.info(
+        "AnthropicChatRoutes",
+        "REFRESH_CHAT_SUMMARY",
+        f"Chat summary refreshed for chat {referenced_chat_id} by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={
+            'referenced_chat_id': referenced_chat_id,
+            'summary_tokens': chat_reference.summary_tokens,
+            'message_count': chat_reference.referenced_chat_message_count
+        }
+    )
+    
+    return jsonify({
+        'success': True,
+        'chat_reference': chat_reference.to_dict(),
+        'message': 'Chat summary refreshed successfully'
+    }), 200
 
 
 # Health check
