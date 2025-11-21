@@ -13,7 +13,8 @@ from typing import Dict, Optional, List
 from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.chat import Chat
-from src.models.project import Project
+from src.models.project import Project, ProjectMember
+from src.models.team import TeamMember
 
 
 logger = logging.getLogger(__name__)
@@ -50,21 +51,32 @@ class ChatService:
 
     def _verify_project_access(self, project_id: int, user_id: int) -> bool:
         """
-        Verify user owns the project
+        Verify user has access to the project (either owns it or it's public)
         
         Args:
             project_id: ID of the project
             user_id: ID of the user
             
         Returns:
-            True if user owns project, False otherwise
+            True if user has access, False otherwise
         """
         project = Project.query.filter_by(
             id=project_id,
-            created_by=user_id,
             is_deleted=False
         ).first()
-        return project is not None
+        
+        if not project:
+            return False
+        
+        # Allow access if user owns the project, is an active project member, or project is public
+        if project.created_by == user_id or project.is_public:
+            return True
+        is_member = ProjectMember.query.filter_by(
+            project_id=project_id,
+            user_id=user_id,
+            is_deleted=False
+        ).first() is not None
+        return is_member
 
     def create_chat(self, name: str, project_id: int, user_id: int,
                    description: Optional[str] = None) -> ChatResult:
@@ -132,7 +144,7 @@ class ChatService:
             return ChatResult(success=False, error=error_msg)
 
     def get_chat_by_id(self, chat_id: int, user_id: int,
-                      include_deleted: bool = False) -> Optional[Dict]:
+                      include_deleted: bool = False, team_id: Optional[int] = None) -> Optional[Dict]:
         """
         Get a specific chat by ID
         
@@ -158,6 +170,16 @@ class ChatService:
             # Verify user owns the parent project
             if not self._verify_project_access(chat.project_id, user_id):
                 return None
+
+            # Optional team filter: ensure project's creator is member of the team
+            if team_id:
+                member_user_ids = db.session.query(TeamMember.user_id).filter(
+                    TeamMember.team_id == team_id,
+                    TeamMember.is_deleted == False
+                )
+                project = Project.query.get(chat.project_id)
+                if not project or project.created_by not in [u for (u,) in member_user_ids]:
+                    return None
             
             return chat.to_dict()
             
@@ -168,7 +190,8 @@ class ChatService:
 
     def list_chats(self, user_id: int, project_id: Optional[int] = None,
                   page: int = 1, per_page: int = 20,
-                  search: str = None, include_deleted: bool = False) -> Dict:
+                  search: str = None, include_deleted: bool = False,
+                  team_id: Optional[int] = None) -> Dict:
         """
         List chats with pagination and search
         
@@ -184,9 +207,27 @@ class ChatService:
             Dictionary with chats list and pagination metadata
         """
         try:
-            # Start with chats from user's projects
-            query = Chat.query.join(Project).filter(Project.created_by == user_id)
+            # Start with chats from user's own projects, projects where user is a member, OR public projects
+            member_project_ids = db.session.query(ProjectMember.project_id).filter(
+                ProjectMember.user_id == user_id,
+                ProjectMember.is_deleted == False
+            )
+            query = Chat.query.join(Project).filter(
+                or_(
+                    Project.created_by == user_id,
+                    Project.id.in_(member_project_ids),
+                    Project.is_public == True
+                )
+            )
             
+            # Optional team filter: only chats where project's creator is a member of team
+            if team_id:
+                member_user_ids = db.session.query(TeamMember.user_id).filter(
+                    TeamMember.team_id == team_id,
+                    TeamMember.is_deleted == False
+                )
+                query = query.filter(Project.created_by.in_(member_user_ids))
+
             # Filter by project if specified
             if project_id:
                 # Verify user owns the project
@@ -512,7 +553,12 @@ class ChatService:
             Dictionary with chat statistics
         """
         try:
-            base_query = Chat.query.join(Project).filter(Project.created_by == user_id)
+            base_query = Chat.query.join(Project).filter(
+                or_(
+                    Project.created_by == user_id,  # User's own projects
+                    Project.is_public == True        # Public projects
+                )
+            )
             
             if project_id:
                 if not self._verify_project_access(project_id, user_id):

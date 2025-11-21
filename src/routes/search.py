@@ -139,12 +139,12 @@ def semantic_search():
 
     # Parâmetros adicionais para POST
     include_content = False
-    similarity_threshold = 0.5
+    similarity_threshold = 0.05
 
     if request.method == 'POST':
         data = request.get_json()
         include_content = data.get('include_content', False)
-        similarity_threshold = data.get('similarity_threshold', 0.5)
+        similarity_threshold = data.get('similarity_threshold', 0.05)
 
     # Adicionar filtro de usuário
     filters['user_id'] = current_user.id

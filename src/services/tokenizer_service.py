@@ -58,18 +58,60 @@ class AnthropicTokenizerService:
         else:
             self.client = Anthropic(api_key=self.api_key)
         
-        # Production-oriented token limits (env-overridable)
-        self.max_context_tokens = int(os.getenv('ANTHROPIC_MAX_CONTEXT_TOKENS', '25000'))
-        self.max_user_question_tokens = int(os.getenv('ANTHROPIC_MAX_USER_QUESTION_TOKENS', '5000'))
-        self.max_document_tokens = int(os.getenv('ANTHROPIC_MAX_DOCUMENT_TOKENS', '50000'))
-        self.max_output_tokens = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8000'))
-        self.max_total_tokens = int(os.getenv('ANTHROPIC_MAX_TOTAL_TOKENS', '90000'))
+        # Token limits: only TOTAL and OUTPUT are authoritative
+        try:
+            self.max_total_tokens = int(os.getenv('ANTHROPIC_MAX_TOTAL_TOKENS', '200000'))
+        except Exception:
+            self.max_total_tokens = 200000
+        try:
+            env_max_out = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8192'))
+        except Exception:
+            env_max_out = 8192
+        # Clamp output to Claude hard cap
+        self.max_output_tokens = max(1, min(env_max_out, 8192))
+
+        # Context budget derives from total - output
+        try:
+            max_context_env = os.getenv('ANTHROPIC_MAX_CONTEXT_TOKENS')
+            self.max_context_tokens = int(max_context_env) if max_context_env else max(0, self.max_total_tokens - self.max_output_tokens)
+        except Exception:
+            self.max_context_tokens = max(0, self.max_total_tokens - self.max_output_tokens)
+
+        # Per-section caps are disabled unless explicitly provided
+        max_user_q_env = os.getenv('ANTHROPIC_MAX_USER_QUESTION_TOKENS')
+        try:
+            self.max_user_question_tokens = int(max_user_q_env) if max_user_q_env else None
+        except Exception:
+            self.max_user_question_tokens = None
+
+        max_doc_env = os.getenv('ANTHROPIC_MAX_DOCUMENT_TOKENS')
+        try:
+            self.max_document_tokens = int(max_doc_env) if max_doc_env else None
+        except Exception:
+            self.max_document_tokens = None
+
+        # Enforcement flags
+        self._enforce_user_limit = self.max_user_question_tokens is not None
+        self._enforce_document_limit = self.max_document_tokens is not None
+        self._enforce_context_limit = max_context_env is not None
         
-        # Context management settings
-        self.target_context_tokens = int(os.getenv('ANTHROPIC_TARGET_CONTEXT_TOKENS', '20000'))
-        self.min_messages_to_keep = int(os.getenv('ANTHROPIC_MIN_MESSAGES_TO_KEEP', '2'))
-        self.max_messages_to_keep = int(os.getenv('ANTHROPIC_MAX_MESSAGES_TO_KEEP', '15'))
-        self.token_buffer = int(os.getenv('ANTHROPIC_TOKEN_BUFFER', '1000'))
+        # Context management settings (optional; derive safe defaults if absent)
+        try:
+            self.target_context_tokens = int(os.getenv('ANTHROPIC_TARGET_CONTEXT_TOKENS', str(min(self.max_context_tokens, 20000))))
+        except Exception:
+            self.target_context_tokens = min(self.max_context_tokens, 20000)
+        try:
+            self.min_messages_to_keep = int(os.getenv('ANTHROPIC_MIN_MESSAGES_TO_KEEP', '2'))
+        except Exception:
+            self.min_messages_to_keep = 2
+        try:
+            self.max_messages_to_keep = int(os.getenv('ANTHROPIC_MAX_MESSAGES_TO_KEEP', '15'))
+        except Exception:
+            self.max_messages_to_keep = 15
+        try:
+            self.token_buffer = int(os.getenv('ANTHROPIC_TOKEN_BUFFER', '1000'))
+        except Exception:
+            self.token_buffer = 1000
         
         # Optional TikToken fallback for better local estimates
         try:
@@ -81,8 +123,8 @@ class AnthropicTokenizerService:
             logger.warning("TikToken not available - using character-based estimation")
         
         logger.info(
-            f"AnthropicTokenizerService initialized with limits: context={self.max_context_tokens}, "
-            f"user_question={self.max_user_question_tokens}, document={self.max_document_tokens}, total={self.max_total_tokens}"
+            f"AnthropicTokenizerService initialized: total={self.max_total_tokens}, "
+            f"output={self.max_output_tokens}, context_budget={self.max_context_tokens}"
         )
     
     def count_tokens(self, text: str, model: str = None) -> int:
@@ -495,13 +537,12 @@ class AnthropicTokenizerService:
         """
         token_usage = self.calculate_token_usage(user_question, context, file_references, system_prompt=system_prompt)
         
-        # Check individual limits
-        if token_usage.user_question_tokens > self.max_user_question_tokens:
+        # Check per-section limits only if explicitly enabled via env
+        if self._enforce_user_limit and token_usage.user_question_tokens > self.max_user_question_tokens:
             return False, f"User question too long: {token_usage.user_question_tokens} tokens (max: {self.max_user_question_tokens})", token_usage
-        
-        if token_usage.context_tokens > self.max_context_tokens:
+        if self._enforce_context_limit and token_usage.context_tokens > self.max_context_tokens:
             return False, f"Context too long: {token_usage.context_tokens} tokens (max: {self.max_context_tokens})", token_usage
-        
+
         if token_usage.total_tokens > self.max_total_tokens:
             return False, f"Total tokens exceed limit: {token_usage.total_tokens} tokens (max: {self.max_total_tokens})", token_usage
         
@@ -576,7 +617,8 @@ class AnthropicTokenizerService:
     # Additional helpers
     def validate_document_tokens(self, document_content: str, document_name: str = "Document") -> Tuple[bool, str, int]:
         token_count = self.count_tokens(document_content)
-        if hasattr(self, 'max_document_tokens') and token_count > self.max_document_tokens:
+        # Enforce document limit only if explicitly configured via env
+        if self._enforce_document_limit and hasattr(self, 'max_document_tokens') and token_count > self.max_document_tokens:
             return (
                 False,
                 f"{document_name} too large: {token_count:,} tokens (max: {self.max_document_tokens:,})",

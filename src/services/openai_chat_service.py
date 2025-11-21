@@ -17,6 +17,7 @@ from sqlalchemy import or_, and_
 from src.extensions import db
 from src.models.ai_chat import AIChat, AIStats
 from src.models.chat import Chat
+from src.models.project import ProjectMember
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ class OpenAIChatService:
 
     def _verify_chat_access(self, chat_id: int, user_id: int) -> bool:
         """
-        Verify user has access to the chat
+        Verify user has access to the chat (either owns it or it's from a public project)
         
         Args:
             chat_id: ID of the chat
@@ -105,10 +106,21 @@ class OpenAIChatService:
         """
         chat = Chat.query.filter_by(
             id=chat_id,
-            created_by=user_id,
             is_deleted=False
         ).first()
-        return chat is not None
+        
+        if not chat:
+            return False
+        
+        # Allow access if user owns the chat, is an active member of the parent project, or project is public
+        if chat.created_by == user_id or chat.project.is_public:
+            return True
+        is_member = ProjectMember.query.filter_by(
+            project_id=chat.project_id,
+            user_id=user_id,
+            is_deleted=False
+        ).first() is not None
+        return is_member
 
     def _touch_chat(self, chat_id: int):
         """
@@ -181,8 +193,18 @@ class OpenAIChatService:
                     error=f"OpenAI API error: {openai_response.error}"
                 )
             
-            # Generate chat name based on user question
-            chat_name = self.generate_chat_name(user_question.strip(), ai_model)
+            # Check if this is the first AI chat in the conversation
+            existing_ai_chats_count = AIChat.query.filter_by(
+                chat_id=chat_id, 
+                user_id=user_id, 
+                is_deleted=False
+            ).count()
+            
+            # Only generate chat name for the first AI chat to minimize AI load
+            if existing_ai_chats_count == 0:
+                chat_name = self.generate_chat_name(user_question.strip(), ai_model)
+            else:
+                chat_name = ""  # Empty string for subsequent AI chats
             
             # Create AI chat record
             ai_chat = AIChat(
@@ -299,8 +321,8 @@ class OpenAIChatService:
                     'pagination': {}
                 }
             
-            # Start with AI chats for the specific chat
-            query = AIChat.query.filter_by(chat_id=chat_id, user_id=user_id)
+            # Start with AI chats for the specific chat (for all users). Access already verified above.
+            query = AIChat.query.filter_by(chat_id=chat_id)
             
             # Filter deleted AI chats
             if not include_deleted:

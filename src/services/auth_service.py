@@ -6,6 +6,7 @@ validação de permissões e controle de sessões.
 """
 
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 from functools import wraps
@@ -17,6 +18,7 @@ from flask import request, jsonify, g
 
 from src.extensions import db
 from src.models import User
+from sqlalchemy import func
 
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:3000")
 
@@ -52,38 +54,56 @@ class AuthService:
         self.refresh_token_expiry_days = 30
         self.reset_password_expiry_minutes = 30
 
-    def register_user(self, username: str, email: str, password: str,
-                      first_name: str = None, last_name: str = None) -> AuthResult:
+    def register_user(self, username: str = None, email: str = None, password: str = None,
+                      first_name: str = None, last_name: str = None, 
+                      role: str = 'owner') -> AuthResult:
         """
         Registrar novo usuário
         
         Args:
-            username: Nome de usuário único
-            email: Email único
+            username: Nome de usuário (opcional, será gerado automaticamente se não fornecido)
+            email: Email único (obrigatório)
             password: Senha em texto plano
             first_name: Primeiro nome (opcional)
             last_name: Último nome (opcional)
+            role: Role do usuário (default: 'owner', can be 'member' or 'owner')
             
         Returns:
             AuthResult com resultado da operação
         """
         try:
-            # Verificar se usuário já existe
+            # Normalize email (lowercase and trim)
+            email = email.lower().strip() if email else email
+            
+            # Check only email uniqueness (username will be auto-generated)
             existing_user = User.query.filter(
-                (User.username == username) | (User.email == email)
+                func.lower(User.email) == email
             ).first()
 
             if existing_user:
-                if existing_user.username == username:
-                    return AuthResult(
-                        success=False,
-                        error="Nome de usuário já existe"
-                    )
-                else:
-                    return AuthResult(
-                        success=False,
-                        error="Email já está em uso"
-                    )
+                return AuthResult(
+                    success=False,
+                    error="Email já está em uso"
+                )
+            
+            # Auto-generate unique username if not provided
+            if not username:
+                # Generate unique username: email prefix + UUID suffix
+                email_prefix = email.split('@')[0] if '@' in email else 'user'
+                # Limit prefix length to avoid too long usernames
+                email_prefix = email_prefix[:30] if len(email_prefix) > 30 else email_prefix
+                # Add UUID to ensure uniqueness
+                unique_suffix = str(uuid.uuid4())[:8]  # First 8 chars of UUID
+                username = f"{email_prefix}_{unique_suffix}"
+            else:
+                # Normalize provided username
+                username = username.lower().strip() if username else username
+            
+            # Ensure username is unique (in case of collision, add more UUID)
+            while User.query.filter(func.lower(User.username) == username).first():
+                unique_suffix = str(uuid.uuid4())[:8]
+                email_prefix = username.split('_')[0] if '_' in username else username[:30]
+                username = f"{email_prefix}_{unique_suffix}"
 
             # Validar dados
             validation_error = self._validate_user_data(username, email, password)
@@ -92,6 +112,11 @@ class AuthService:
                     success=False,
                     error=validation_error
                 )
+
+            # Validate role
+            valid_roles = ['owner', 'member']
+            if role not in valid_roles:
+                role = 'owner'  # Default to owner if invalid
 
             # Hash da senha
             password_hash = self._hash_password(password)
@@ -102,7 +127,8 @@ class AuthService:
                 email=email,
                 password_hash=password_hash,
                 first_name=first_name or '',
-                last_name=last_name or ''
+                last_name=last_name or '',
+                role=role  # Set role from parameter
             )
 
             db.session.add(user)

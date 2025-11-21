@@ -411,7 +411,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -444,7 +444,8 @@ def send_message():
         conversation_context=data.get('conversation_context'),
         context_limit=context_limit,
         file_references=data.get('file_references'),
-        file_reference_details=data.get('file_reference_details')
+        file_reference_details=data.get('file_reference_details'),
+        use_rag=data.get('use_rag', False)
     )
     
     if not result.success:
@@ -488,7 +489,7 @@ def send_message():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat_stream")
@@ -518,10 +519,12 @@ def send_message_stream():
     # Production-grade rate limiting (aligned with Anthropic's capabilities)
     rate_limit_key = f"ai_chat_stream_rate_limit_{current_user.id}"
     current_requests = getattr(g, 'cache_service', None)
+
     if current_requests:
         # Use service configuration for rate limiting
         streaming_rate_limit = anthropic_chat_service.streaming_rate_limit
         current_count = current_requests.get(rate_limit_key) or 0
+
         if current_count >= streaming_rate_limit:
             return jsonify({
                 'error': 'Streaming rate limit exceeded',
@@ -568,7 +571,8 @@ def send_message_stream():
                 conversation_context=data.get('conversation_context'),
                 context_limit=context_limit,
                 file_references=data.get('file_references'),
-                file_reference_details=data.get('file_reference_details')
+                file_reference_details=data.get('file_reference_details'),
+                use_rag=data.get('use_rag', False)
             ):
                 # Add stream metadata to each event
                 event['stream_id'] = stream_id

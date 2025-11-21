@@ -28,19 +28,17 @@ class AnthropicFileService:
         self.client = None
         self._initialized = False
         
-        # File validation settings
-        self.max_file_size = 10 * 1024 * 1024  # 10MB
-        self.allowed_mime_types = {
-            # Images
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            # Documents
-            'application/pdf', 'text/plain', 'text/csv', 'application/json',
-            # Code files
-            'text/x-python', 'application/javascript', 'text/typescript',
-            'text/x-java-source', 'text/x-c++src', 'text/x-go',
-            # Other supported types
-            'text/markdown', 'application/xml', 'text/xml'
-        }
+        # File validation settings (env-driven, default: no local cap)
+        try:
+            self.max_file_size = int(os.getenv('ANTHROPIC_FILE_MAX_SIZE_BYTES', '0')) or None
+        except Exception:
+            self.max_file_size = None
+        # Comma-separated list of MIME types; if unset, allow all
+        mime_env = os.getenv('ANTHROPIC_ALLOWED_MIME_TYPES')
+        if mime_env:
+            self.allowed_mime_types = {m.strip() for m in mime_env.split(',') if m.strip()}
+        else:
+            self.allowed_mime_types = None
         
     def _ensure_initialized(self) -> bool:
         """
@@ -85,13 +83,25 @@ class AnthropicFileService:
             errors.append("No file provided")
             return {'valid': False, 'errors': errors}
         
-        # Check file size
-        if file.content_length and file.content_length > self.max_file_size:
-            errors.append(f"File size ({file.content_length} bytes) exceeds maximum limit of {self.max_file_size} bytes")
+        # Check file size (only if configured)
+        try:
+            if self.max_file_size is not None:
+                size = getattr(file, 'content_length', None)
+                if size is None:
+                    # Attempt to measure when content_length not provided
+                    pos = file.stream.tell()
+                    file.stream.seek(0, 2)
+                    size = file.stream.tell()
+                    file.stream.seek(pos)
+                if isinstance(size, int) and size > self.max_file_size:
+                    errors.append(f"File size ({size} bytes) exceeds maximum limit of {self.max_file_size} bytes")
+        except Exception:
+            pass
         
-        # Check MIME type
-        if file.content_type not in self.allowed_mime_types:
-            errors.append(f"File type '{file.content_type}' is not supported. Allowed types: {', '.join(sorted(self.allowed_mime_types))}")
+        # Check MIME type (only if configured)
+        if self.allowed_mime_types is not None:
+            if file.content_type not in self.allowed_mime_types:
+                errors.append(f"File type '{file.content_type}' is not supported. Allowed types: {', '.join(sorted(self.allowed_mime_types))}")
         
         # Check filename
         if len(file.filename) > 255:
