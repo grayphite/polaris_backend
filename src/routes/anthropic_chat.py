@@ -132,6 +132,16 @@ def list_ai_chats(chat_id):
     search = request.args.get('search', '').strip()
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
     
+    # Get chat name
+    from src.models.chat import Chat
+    chat = Chat.query.filter_by(
+        id=chat_id,
+        is_deleted=False
+    ).first()
+    
+    if not chat:
+        return jsonify({'error': 'Chat not found'}), 404
+    
     # Fetch from service
     result = anthropic_chat_service.list_ai_chats(
         chat_id=chat_id,
@@ -141,6 +151,68 @@ def list_ai_chats(chat_id):
         search=search,
         include_deleted=include_deleted
     )
+    
+    # Collect all unique referenced chat IDs and user IDs to fetch names/info
+    all_referenced_chat_ids = set()
+    all_user_ids = set()
+    for ai_chat in result.get('ai_chats', []):
+        referenced_chat_ids = ai_chat.get('referenced_chat_ids', [])
+        if referenced_chat_ids:
+            all_referenced_chat_ids.update(referenced_chat_ids)
+        # Collect user IDs
+        user_id = ai_chat.get('user_id')
+        if user_id:
+            all_user_ids.add(user_id)
+    
+    # Fetch all referenced chat names in one query
+    chat_names_map = {}
+    if all_referenced_chat_ids:
+        referenced_chats = Chat.query.filter(
+            Chat.id.in_(list(all_referenced_chat_ids)),
+            Chat.is_deleted == False
+        ).all()
+        chat_names_map = {chat.id: chat.name for chat in referenced_chats}
+    
+    # Fetch all user information in one query
+    from src.models.user import User
+    users_map = {}
+    if all_user_ids:
+        users = User.query.filter(User.id.in_(list(all_user_ids))).all()
+        users_map = {user.id: user.to_dict() for user in users}
+    
+    # Format referenced_chat_ids with names and add user_info for each AI chat
+    for ai_chat in result.get('ai_chats', []):
+        # Add user_info
+        user_id = ai_chat.get('user_id')
+        if user_id and user_id in users_map:
+            ai_chat['user_info'] = users_map[user_id]
+        else:
+            # Fallback if user not found
+            ai_chat['user_info'] = {
+                'id': user_id,
+                'username': None,
+                'email': None,
+                'first_name': None,
+                'last_name': None,
+                'role': None,
+                'is_active': None
+            }
+        
+        # Format referenced_chat_ids with names
+        referenced_chat_ids = ai_chat.get('referenced_chat_ids', [])
+        if referenced_chat_ids:
+            # Replace referenced_chat_ids array with formatted array including names
+            ai_chat['referenced_chat_ids'] = [
+                {
+                    "id": ref_chat_id,
+                    "name": chat_names_map.get(ref_chat_id, f"Chat {ref_chat_id}")
+                }
+                for ref_chat_id in referenced_chat_ids
+            ]
+    
+    # Add chat name to response
+    result['chat_id'] = chat_id
+    result['chat_name'] = chat.name
     
     logging_service.info(
         "AnthropicChatRoutes",
@@ -411,7 +483,7 @@ def get_ai_chat_stats():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_id']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_ids']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat")
@@ -436,14 +508,17 @@ def send_message():
         except (ValueError, TypeError):
             return jsonify({'error': 'context_limit must be a valid integer'}), 400
     
-    # Validate referenced_chat_id if provided
-    referenced_chat_id = data.get('referenced_chat_id')
-    if referenced_chat_id is not None:
+    # Validate referenced_chat_ids if provided
+    referenced_chat_ids = data.get('referenced_chat_ids')
+    if referenced_chat_ids is not None:
+        if not isinstance(referenced_chat_ids, list):
+            return jsonify({'error': 'referenced_chat_ids must be a list'}), 400
         try:
-            referenced_chat_id = int(referenced_chat_id)
+            # Convert all to integers
+            referenced_chat_ids = [int(chat_id) for chat_id in referenced_chat_ids]
             # Additional validation will be done in service layer
         except (ValueError, TypeError):
-            return jsonify({'error': 'referenced_chat_id must be a valid integer'}), 400
+            return jsonify({'error': 'referenced_chat_ids must be a list of valid integers'}), 400
     
     # Create AI chat via service (this will also send to Anthropic)
     result = anthropic_chat_service.create_ai_chat(
@@ -455,7 +530,7 @@ def send_message():
         file_references=data.get('file_references'),
         file_reference_details=data.get('file_reference_details'),
         use_rag=data.get('use_rag', False),
-        referenced_chat_id=referenced_chat_id
+        referenced_chat_ids=referenced_chat_ids
     )
     
     if not result.success:
@@ -499,7 +574,7 @@ def send_message():
 @auth_service.require_auth
 @validate_request_data(
     required_fields=['chat_id', 'user_question'],
-    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_id']
+    optional_fields=['conversation_context', 'context_limit', 'file_references', 'file_reference_details', 'use_rag', 'referenced_chat_ids']
 )
 @handle_errors
 @log_action(ActionType.CREATE, "ai_chat_stream")
@@ -526,14 +601,17 @@ def send_message_stream():
         except (ValueError, TypeError):
             return jsonify({'error': 'context_limit must be a valid integer'}), 400
     
-    # Validate referenced_chat_id if provided
-    referenced_chat_id = data.get('referenced_chat_id')
-    if referenced_chat_id is not None:
+    # Validate referenced_chat_ids if provided
+    referenced_chat_ids = data.get('referenced_chat_ids')
+    if referenced_chat_ids is not None:
+        if not isinstance(referenced_chat_ids, list):
+            return jsonify({'error': 'referenced_chat_ids must be a list'}), 400
         try:
-            referenced_chat_id = int(referenced_chat_id)
+            # Convert all to integers
+            referenced_chat_ids = [int(chat_id) for chat_id in referenced_chat_ids]
             # Additional validation will be done in service layer
         except (ValueError, TypeError):
-            return jsonify({'error': 'referenced_chat_id must be a valid integer'}), 400
+            return jsonify({'error': 'referenced_chat_ids must be a list of valid integers'}), 400
     
     # Production-grade rate limiting (aligned with Anthropic's capabilities)
     rate_limit_key = f"ai_chat_stream_rate_limit_{current_user.id}"
@@ -592,7 +670,7 @@ def send_message_stream():
                 file_references=data.get('file_references'),
                 file_reference_details=data.get('file_reference_details'),
                 use_rag=data.get('use_rag', False),
-                referenced_chat_id=referenced_chat_id
+                referenced_chat_ids=referenced_chat_ids
             ):
                 # Add stream metadata to each event
                 event['stream_id'] = stream_id
@@ -786,6 +864,107 @@ def refresh_chat_summary():
         'success': True,
         'chat_reference': chat_reference.to_dict(),
         'message': 'Chat summary refreshed successfully'
+    }), 200
+
+
+@anthropic_chat_bp.route('/ai-chats/chat-references-mapping', methods=['GET'])
+@auth_service.require_auth
+@handle_errors
+@log_action(ActionType.READ, "chat_references_mapping")
+def get_chat_references_mapping():
+    """
+    Get mapping of chat references used in chat messages
+    
+    Returns nested structure: {chat_id: {aichat_id: [referenced_chat_ids]}}
+    
+    Query parameters:
+    - chat_id: ID of the chat to get references for (required)
+    """
+    current_user = get_current_user()
+    chat_id = request.args.get('chat_id', type=int)
+    
+    if not chat_id:
+        return jsonify({'error': 'chat_id query parameter is required'}), 400
+    
+    # Verify user has access to the chat and get chat info
+    from src.models.chat import Chat
+    chat = Chat.query.filter_by(
+        id=chat_id,
+        is_deleted=False
+    ).first()
+    
+    if not chat or not anthropic_chat_service._verify_chat_access(chat_id, current_user.id):
+        return jsonify({'error': 'Chat not found or access denied'}), 404
+    
+    # Query all AIChats for this chat_id (non-deleted)
+    from src.models.ai_chat import AIChat
+    ai_chats = AIChat.query.filter_by(
+        chat_id=chat_id,
+        is_deleted=False
+    ).order_by(AIChat.created_at.asc()).all()
+    
+    # Collect all unique referenced chat IDs to fetch names in one query
+    all_referenced_chat_ids = set()
+    ai_chat_references = {}  # {aichat_id: {referenced_chat_ids: [...], ai_chat_info: {...}}}
+    
+    for ai_chat in ai_chats:
+        # Get referenced_chat_ids (JSON field)
+        referenced_chat_ids = ai_chat.referenced_chat_ids if ai_chat.referenced_chat_ids else []
+        # Only include if there are referenced chats
+        if referenced_chat_ids:
+            ai_chat_references[ai_chat.id] = {
+                "referenced_chat_ids": referenced_chat_ids,
+                "ai_chat_info": {
+                    "id": ai_chat.id,
+                    "user_question": ai_chat.user_question[:100] + "..." if len(ai_chat.user_question) > 100 else ai_chat.user_question,
+                    "chat_name": ai_chat.chat_name,
+                    "created_at": ai_chat.created_at.isoformat() if ai_chat.created_at else None
+                }
+            }
+            all_referenced_chat_ids.update(referenced_chat_ids)
+    
+    # Fetch all referenced chat names in one query
+    chat_names_map = {}
+    if all_referenced_chat_ids:
+        referenced_chats = Chat.query.filter(
+            Chat.id.in_(list(all_referenced_chat_ids)),
+            Chat.is_deleted == False
+        ).all()
+        chat_names_map = {chat.id: chat.name for chat in referenced_chats}
+    
+    # Build nested structure with names: {aichat_id: {ai_chat_info: {...}, referenced_chat_ids: [...], referenced_chats: [...]}}
+    references = {}
+    for ai_chat_id, data in ai_chat_references.items():
+        referenced_chat_ids = data["referenced_chat_ids"]
+        referenced_chats = [
+            {
+                "id": ref_chat_id,
+                "name": chat_names_map.get(ref_chat_id, f"Chat {ref_chat_id}")
+            }
+            for ref_chat_id in referenced_chat_ids
+        ]
+        references[str(ai_chat_id)] = {
+            "ai_chat_info": data["ai_chat_info"],
+            "referenced_chat_ids": referenced_chat_ids,
+            "referenced_chats": referenced_chats
+        }
+    
+    logging_service.info(
+        "AnthropicChatRoutes",
+        "GET_CHAT_REFERENCES_MAPPING",
+        f"Retrieved chat references mapping for chat {chat_id} by user {current_user.id}",
+        user_id=current_user.id,
+        metadata={
+            'chat_id': chat_id,
+            'ai_chat_count': len(ai_chats),
+            'referenced_count': len(references)
+        }
+    )
+    
+    return jsonify({
+        'chat_id': chat_id,
+        'chat_name': chat.name,
+        'references': references
     }), 200
 
 

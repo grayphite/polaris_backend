@@ -7,8 +7,7 @@ def get_adaptive_system_prompt(
         conversation_context: str = None,
         rag_metadata: dict = None,
         question_type: str = "auto",
-        referenced_chat_summary: str = None,
-        referenced_chat_name: str = None
+        referenced_chat_summaries: list = None
 ) -> str:
     """
     Get an adaptive system prompt that handles both tax and general questions
@@ -330,14 +329,22 @@ def get_adaptive_system_prompt(
         base_prompt += context_section
     
     # Add referenced chat context if provided
-    if referenced_chat_summary:
+    if referenced_chat_summaries:
         referenced_section = f"\n\n=== REFERENCED CHAT CONTEXT ===\n"
-        referenced_section += f"The user has referenced another chat conversation ('{referenced_chat_name or 'Referenced Chat'}') that contains relevant context for their current question.\n"
-        referenced_section += "IMPORTANT: Pay special attention to this referenced chat summary when answering the user's question.\n"
-        referenced_section += "Use information from this referenced chat to provide more informed and contextually relevant responses.\n"
-        referenced_section += "If the current question relates to topics discussed in the referenced chat, incorporate that context into your answer.\n"
-        referenced_section += "When referencing information from the referenced chat, acknowledge it appropriately in your response.\n\n"
-        referenced_section += f"Referenced Chat Summary:\n{referenced_chat_summary}\n"
+        referenced_section += f"The user has referenced {len(referenced_chat_summaries)} chat conversation(s) that contain relevant context for their current question.\n"
+        referenced_section += "IMPORTANT: Pay special attention to these referenced chat summaries when answering the user's question.\n"
+        referenced_section += "Use information from these referenced chats to provide more informed and contextually relevant responses.\n"
+        referenced_section += "If the current question relates to topics discussed in any of the referenced chats, incorporate that context into your answer.\n"
+        referenced_section += "When referencing information from a referenced chat, acknowledge it appropriately in your response.\n\n"
+        
+        for i, ref_chat in enumerate(referenced_chat_summaries, 1):
+            summary = ref_chat.get("summary", "")
+            name = ref_chat.get("name", f"Referenced Chat {i}")
+            chat_id = ref_chat.get("id", "")
+            
+            referenced_section += f"--- Referenced Chat {i}: {name} (ID: {chat_id}) ---\n"
+            referenced_section += f"{summary}\n\n"
+        
         referenced_section += "=== END REFERENCED CHAT CONTEXT ===\n"
         base_prompt += referenced_section
     

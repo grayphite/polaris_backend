@@ -162,7 +162,7 @@ class AnthropicChatService:
     def create_ai_chat_stream(self, chat_id: int, user_id: int, user_question: str,
                              conversation_context: str = None, context_limit: int = 10, 
                              file_references: list = None, file_reference_details: list = None,
-                             use_rag: bool = False, referenced_chat_id: int = None):
+                             use_rag: bool = False, referenced_chat_ids: list = None):
         """
         Create a streaming AI chat conversation
         
@@ -258,12 +258,11 @@ class AnthropicChatService:
                 }
                 return
             
-            # Handle referenced chat if provided
-            referenced_chat_summary = None
-            referenced_chat_name = None
-            if referenced_chat_id:
-                # Validate reference access
-                if not self._verify_chat_reference_access(referenced_chat_id, chat_id, user_id):
+            # Handle referenced chats if provided
+            referenced_chat_summaries = []
+            if referenced_chat_ids:
+                # Validate reference access for all chats
+                if not self._verify_chat_reference_access(referenced_chat_ids, chat_id, user_id):
                     yield {
                         "type": "error",
                         "error": {
@@ -273,26 +272,26 @@ class AnthropicChatService:
                     }
                     return
                 
-                # Get or generate summary (lazy generation)
-                chat_reference = self.get_or_generate_summary(referenced_chat_id, user_id)
-                if chat_reference:
-                    referenced_chat_summary = chat_reference.summary
-                    # Get referenced chat name
-                    referenced_chat = Chat.query.get(referenced_chat_id)
-                    if referenced_chat:
-                        referenced_chat_name = referenced_chat.name
-                else:
+                # Get or generate summaries for all referenced chats (lazy generation)
+                referenced_chat_summaries = self._get_multiple_chat_summaries(referenced_chat_ids, user_id)
+                
+                if not referenced_chat_summaries:
                     yield {
                         "type": "error",
                         "error": {
                             "type": "summary_generation_error",
-                            "message": "Failed to generate summary for referenced chat"
+                            "message": "Failed to generate summaries for referenced chats"
                         }
                     }
                     return
             
             # Generate previous context if not provided
-            if not conversation_context:
+            # If referenced_chat_ids is provided, skip conversation_context (set to None)
+            if referenced_chat_ids:
+                # Skip previous context when references are provided
+                conversation_context = None
+            elif not conversation_context:
+                # Generate previous context only if no references provided
                 conversation_context = self.generate_previous_context(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -360,28 +359,24 @@ class AnthropicChatService:
                 context_chunks = rag_metadata.get('context_chunks', [])
                 rag_sources = context_chunks
             
-            # Get system prompt with referenced chat summary (if provided)
-            # The system prompt will handle adding the referenced chat summary separately
+            # Get system prompt with referenced chat summaries (if provided)
+            # The system prompt will handle adding the referenced chat summaries separately
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
                 rag_metadata=rag_metadata,
                 question_type=question_type,
-                referenced_chat_summary=referenced_chat_summary,
-                referenced_chat_name=referenced_chat_name
+                referenced_chat_summaries=referenced_chat_summaries
             )
             
-            # For token calculation, we need to account for both current context and referenced summary
-            # The system prompt already includes both, so we pass the combined context for accurate token counting
-            # But we'll use conversation_context (current chat only) in the actual API call
-            # since the system prompt handles the referenced chat summary separately
-            final_conversation_context = conversation_context
-            if referenced_chat_summary and referenced_chat_name:
-                # Combine for token calculation accuracy
-                combined_for_tokens = self.combine_chat_contexts(
-                    conversation_context,
-                    referenced_chat_summary,
-                    referenced_chat_name
-                )
+            # For token calculation, we need to account for both current context and referenced summaries
+            # Combine referenced chat summaries into a single string for token calculation
+            if referenced_chat_summaries:
+                referenced_context = self.combine_chat_contexts(referenced_chat_summaries)
+                # Combine current context with referenced summaries for token calculation
+                if conversation_context:
+                    combined_for_tokens = f"{conversation_context}\n\n{referenced_context}"
+                else:
+                    combined_for_tokens = referenced_context
             else:
                 combined_for_tokens = conversation_context
             
@@ -494,7 +489,7 @@ class AnthropicChatService:
                     conversation_context=conversation_context,
                     file_references=json.dumps(file_references) if file_references else None,
                     file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
-                    referenced_chat_id=referenced_chat_id,
+                    referenced_chat_ids=referenced_chat_ids if referenced_chat_ids else None,
                     context_metadata={
                         'api_version': '2023-06-01',
                         'request_timestamp': datetime.now(timezone.utc).isoformat(),
@@ -576,7 +571,7 @@ class AnthropicChatService:
     def create_ai_chat(self, chat_id: int, user_id: int, user_question: str,
                       conversation_context: str = None, context_limit: int = 10, 
                       file_references: list = None, file_reference_details: list = None,
-                      use_rag: bool = False, referenced_chat_id: int = None) -> AIChatResult:
+                      use_rag: bool = False, referenced_chat_ids: list = None) -> AIChatResult:
         """
         Create a new AI chat conversation
         
@@ -642,33 +637,32 @@ class AnthropicChatService:
                     error="file_references must be a list of file IDs"
                 )
             
-            # Handle referenced chat if provided
-            referenced_chat_summary = None
-            referenced_chat_name = None
-            if referenced_chat_id:
-                # Validate reference access
-                if not self._verify_chat_reference_access(referenced_chat_id, chat_id, user_id):
+            # Handle referenced chats if provided
+            referenced_chat_summaries = []
+            if referenced_chat_ids:
+                # Validate reference access for all chats
+                if not self._verify_chat_reference_access(referenced_chat_ids, chat_id, user_id):
                     return AIChatResult(
                         success=False,
                         error="Invalid chat reference: chat not found, access denied, or chats belong to different projects"
                     )
                 
-                # Get or generate summary (lazy generation)
-                chat_reference = self.get_or_generate_summary(referenced_chat_id, user_id)
-                if chat_reference:
-                    referenced_chat_summary = chat_reference.summary
-                    # Get referenced chat name
-                    referenced_chat = Chat.query.get(referenced_chat_id)
-                    if referenced_chat:
-                        referenced_chat_name = referenced_chat.name
-                else:
+                # Get or generate summaries for all referenced chats (lazy generation)
+                referenced_chat_summaries = self._get_multiple_chat_summaries(referenced_chat_ids, user_id)
+                
+                if not referenced_chat_summaries:
                     return AIChatResult(
                         success=False,
-                        error="Failed to generate summary for referenced chat"
+                        error="Failed to generate summaries for referenced chats"
                     )
             
             # Generate previous context if not provided
-            if not conversation_context:
+            # If referenced_chat_ids is provided, skip conversation_context (set to None)
+            if referenced_chat_ids:
+                # Skip previous context when references are provided
+                conversation_context = None
+            elif not conversation_context:
+                # Generate previous context only if no references provided
                 conversation_context = self.generate_previous_context(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -730,23 +724,24 @@ class AnthropicChatService:
                     'processing_mode': 'normal'
                 }
             
-            # Get adaptive system prompt with RAG metadata and referenced chat summary
+            # Get adaptive system prompt with RAG metadata and referenced chat summaries
             system_context = get_adaptive_system_prompt(
                 conversation_context=conversation_context,
                 rag_metadata=rag_metadata,
                 question_type=question_type,
-                referenced_chat_summary=referenced_chat_summary,
-                referenced_chat_name=referenced_chat_name
+                referenced_chat_summaries=referenced_chat_summaries
             )
             
             # Combine contexts for token calculation accuracy
-            combined_for_tokens = conversation_context
-            if referenced_chat_summary and referenced_chat_name:
-                combined_for_tokens = self.combine_chat_contexts(
-                    conversation_context,
-                    referenced_chat_summary,
-                    referenced_chat_name
-                )
+            if referenced_chat_summaries:
+                referenced_context = self.combine_chat_contexts(referenced_chat_summaries)
+                # Combine current context with referenced summaries for token calculation
+                if conversation_context:
+                    combined_for_tokens = f"{conversation_context}\n\n{referenced_context}"
+                else:
+                    combined_for_tokens = referenced_context
+            else:
+                combined_for_tokens = conversation_context
             
             optimized_context, token_usage, truncation_result = tokenizer_service.optimize_context_for_request(
                 user_question=user_question,
@@ -808,7 +803,7 @@ class AnthropicChatService:
                 conversation_context=conversation_context,
                 file_references=json.dumps(file_references) if file_references else None,
                 file_reference_details=json.dumps(file_reference_details) if file_reference_details else None,
-                referenced_chat_id=referenced_chat_id,
+                referenced_chat_ids=referenced_chat_ids if referenced_chat_ids else None,
                 context_metadata={
                     'api_version': '2023-06-01',
                     'request_timestamp': datetime.now(timezone.utc).isoformat(),
@@ -1263,17 +1258,48 @@ class AnthropicChatService:
                 self.logger.warning(f"User {user_id} does not have access to chat {chat_id}")
                 return ""
             
-            # Query recent AI chats for this chat
+            # Get the LAST (most recent) AIChat in this chat
+            last_chat = AIChat.query.filter_by(
+                chat_id=chat_id,
+                user_id=user_id,
+                is_deleted=False
+            ).order_by(
+                AIChat.created_at.desc()
+            ).first()
+            
+            # If last message HAD referenced_chat_ids, skip context generation
+            if last_chat and last_chat.referenced_chat_ids:
+                self.logger.info(f"Last message in chat {chat_id} has referenced_chat_ids, skipping context generation")
+                return ""
+            
+            # Query recent AI chats for this chat (chain logic: only messages without referenced_chat_ids)
             recent_chats = AIChat.query.filter_by(
                 chat_id=chat_id,
                 user_id=user_id,
                 is_deleted=False
             ).order_by(
                 AIChat.created_at.desc()
-            ).limit(context_limit).all()
+            ).limit(context_limit * 2).all()  # Get more to account for filtering
             
             if not recent_chats:
                 self.logger.info(f"No previous AI chats found for chat {chat_id}")
+                return ""
+            
+            # Build chain: only include messages that don't have referenced_chat_ids
+            # Stop when encountering a message with referenced_chat_ids (chain break)
+            chain_chats = []
+            for ai_chat in recent_chats:
+                # If this message has referenced_chat_ids, break the chain
+                if ai_chat.referenced_chat_ids:
+                    break
+                # Add to chain (messages without referenced_chat_ids)
+                chain_chats.append(ai_chat)
+                # Limit chain length
+                if len(chain_chats) >= context_limit:
+                    break
+            
+            if not chain_chats:
+                self.logger.info(f"No chain messages found for chat {chat_id} (all have referenced_chat_ids)")
                 return ""
             
             # Format the context for Anthropic Claude
@@ -1282,7 +1308,7 @@ class AnthropicChatService:
             context_parts.append("")
             
             # Reverse to get chronological order (oldest first)
-            for ai_chat in reversed(recent_chats):
+            for ai_chat in reversed(chain_chats):
                 if ai_chat.user_question and ai_chat.ai_answer:
                     context_parts.append(f"Human: {ai_chat.user_question}")
                     context_parts.append(f"Assistant: {ai_chat.ai_answer}")
@@ -1825,49 +1851,65 @@ Name:"""
                 error=error_msg
             )
 
-    def _verify_chat_reference_access(self, referenced_chat_id: int, current_chat_id: int, user_id: int) -> bool:
+    def _verify_chat_reference_access(self, referenced_chat_ids: list, current_chat_id: int, user_id: int) -> bool:
         """
-        Verify that a chat can be referenced from another chat
+        Verify that chats can be referenced from another chat
         
         Args:
-            referenced_chat_id: ID of the chat to be referenced
+            referenced_chat_ids: List of chat IDs to be referenced
             current_chat_id: ID of the current chat
             user_id: ID of the user requesting the reference
             
         Returns:
-            True if valid, False otherwise
+            True if all valid, False otherwise
         """
         try:
+            # Handle empty or None list
+            if not referenced_chat_ids:
+                return True  # Empty list is valid (no references)
+            
+            # Validate all IDs are integers
+            if not all(isinstance(chat_id, int) for chat_id in referenced_chat_ids):
+                self.logger.warning(f"Invalid referenced_chat_ids format: {referenced_chat_ids}")
+                return False
+            
             # Cannot reference the same chat
-            if referenced_chat_id == current_chat_id:
+            if current_chat_id in referenced_chat_ids:
                 self.logger.warning(f"User {user_id} attempted to reference same chat {current_chat_id}")
                 return False
             
-            # Get both chats
-            referenced_chat = Chat.query.filter_by(
-                id=referenced_chat_id,
-                is_deleted=False
-            ).first()
-            
+            # Get current chat
             current_chat = Chat.query.filter_by(
                 id=current_chat_id,
                 is_deleted=False
             ).first()
             
-            if not referenced_chat or not current_chat:
-                self.logger.warning(f"One or both chats not found: referenced={referenced_chat_id}, current={current_chat_id}")
+            if not current_chat:
+                self.logger.warning(f"Current chat not found: {current_chat_id}")
                 return False
             
-            # Both chats must belong to same project
-            if referenced_chat.project_id != current_chat.project_id:
-                self.logger.warning(f"Chats belong to different projects: referenced={referenced_chat.project_id}, current={current_chat.project_id}")
+            # Get all referenced chats
+            referenced_chats = Chat.query.filter(
+                Chat.id.in_(referenced_chat_ids),
+                Chat.is_deleted == False
+            ).all()
+            
+            if len(referenced_chats) != len(referenced_chat_ids):
+                self.logger.warning(f"Some referenced chats not found: requested={referenced_chat_ids}, found={[c.id for c in referenced_chats]}")
                 return False
             
-            # Verify user has access to both chats
-            if not self._verify_chat_access(referenced_chat_id, user_id):
-                self.logger.warning(f"User {user_id} does not have access to referenced chat {referenced_chat_id}")
-                return False
+            # All referenced chats must belong to same project as current chat
+            for referenced_chat in referenced_chats:
+                if referenced_chat.project_id != current_chat.project_id:
+                    self.logger.warning(f"Chat {referenced_chat.id} belongs to different project: {referenced_chat.project_id} vs {current_chat.project_id}")
+                    return False
+                
+                # Verify user has access to each referenced chat
+                if not self._verify_chat_access(referenced_chat.id, user_id):
+                    self.logger.warning(f"User {user_id} does not have access to referenced chat {referenced_chat.id}")
+                    return False
             
+            # Verify user has access to current chat
             if not self._verify_chat_access(current_chat_id, user_id):
                 self.logger.warning(f"User {user_id} does not have access to current chat {current_chat_id}")
                 return False
@@ -2040,27 +2082,72 @@ Previous conversation:
         # Generate new summary (lazy generation)
         return self.generate_chat_summary(referenced_chat_id, user_id, force_refresh=False)
 
-    def combine_chat_contexts(self, current_chat_context: str, referenced_chat_summary: str, referenced_chat_name: str) -> str:
+    def _get_multiple_chat_summaries(self, referenced_chat_ids: list, user_id: int) -> list:
         """
-        Combine current chat context with referenced chat summary
+        Get or generate summaries for multiple referenced chats
         
         Args:
-            current_chat_context: Previous conversation context from current chat
-            referenced_chat_summary: Summary of referenced chat
-            referenced_chat_name: Name of the referenced chat
+            referenced_chat_ids: List of chat IDs to get summaries for
+            user_id: ID of the user requesting summaries
             
         Returns:
-            Combined context string
+            List of dicts with keys: {"summary": str, "name": str, "id": int}
+            Returns empty list if error or empty input
         """
-        combined = "=== CURRENT CHAT CONTEXT ===\n"
-        combined += current_chat_context if current_chat_context else "(No previous context)"
-        combined += "\n=== END CURRENT CHAT CONTEXT ===\n\n"
-        combined += f"=== REFERENCED CHAT: {referenced_chat_name} ===\n"
-        combined += "The following is a summary of a referenced chat that the user wants to use as context for their current question:\n\n"
-        combined += referenced_chat_summary
-        combined += "\n\n=== END REFERENCED CHAT ===\n"
+        if not referenced_chat_ids:
+            return []
         
-        return combined
+        summaries = []
+        
+        for referenced_chat_id in referenced_chat_ids:
+            try:
+                # Get or generate summary (lazy generation)
+                chat_reference = self.get_or_generate_summary(referenced_chat_id, user_id)
+                
+                if chat_reference:
+                    # Get referenced chat name
+                    referenced_chat = Chat.query.get(referenced_chat_id)
+                    chat_name = referenced_chat.name if referenced_chat else f"Chat {referenced_chat_id}"
+                    
+                    summaries.append({
+                        "summary": chat_reference.summary,
+                        "name": chat_name,
+                        "id": referenced_chat_id
+                    })
+                else:
+                    self.logger.warning(f"Failed to get/generate summary for chat {referenced_chat_id}")
+            except Exception as e:
+                self.logger.error(f"Error getting summary for chat {referenced_chat_id}: {str(e)}")
+                # Continue with other chats even if one fails
+        
+        return summaries
+
+    def combine_chat_contexts(self, referenced_chat_summaries: list) -> str:
+        """
+        Combine multiple referenced chat summaries into context string
+        
+        Args:
+            referenced_chat_summaries: List of dicts with keys: {"summary": str, "name": str, "id": int}
+            
+        Returns:
+            Combined context string with all referenced chats
+        """
+        if not referenced_chat_summaries:
+            return ""
+        
+        combined = ""
+        
+        for i, ref_chat in enumerate(referenced_chat_summaries, 1):
+            summary = ref_chat.get("summary", "")
+            name = ref_chat.get("name", f"Referenced Chat {i}")
+            chat_id = ref_chat.get("id", "")
+            
+            combined += f"=== REFERENCED CHAT {i}: {name} (ID: {chat_id}) ===\n"
+            combined += "The following is a summary of a referenced chat that the user wants to use as context for their current question:\n\n"
+            combined += summary
+            combined += "\n\n=== END REFERENCED CHAT {i} ===\n\n".format(i=i)
+        
+        return combined.strip()
 
     def health_check(self) -> Dict:
         """
