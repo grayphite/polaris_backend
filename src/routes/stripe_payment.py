@@ -121,9 +121,49 @@ def get_team_subscription(team_id):
             team_id=team_id, 
             is_active=True, 
             is_deleted=False
-        ).filter(
-            TeamSubscription.status != 'canceled'
         ).order_by(TeamSubscription.id.desc()).all()
+        
+        # FALLBACK: If no subscription found in DB, try to find it in Stripe and sync
+        if not subscriptions:
+            print(f'No subscription found in DB for team {team_id}. Attempting to sync from Stripe...')
+            try:
+                # Get team to find customer
+                team = Team.query.get(team_id)
+                if team:
+                    # Try to find any subscription for this team in Stripe by searching customers
+                    # First, check if we have any subscription records with stripe_subscription_id
+                    any_subscription = TeamSubscription.query.filter_by(
+                        team_id=team_id,
+                        is_deleted=False
+                    ).filter(
+                        TeamSubscription.stripe_subscription_id.isnot(None)
+                    ).order_by(TeamSubscription.id.desc()).first()
+                    
+                    if any_subscription and any_subscription.stripe_subscription_id:
+                        # Try to retrieve from Stripe
+                        try:
+                            stripe_sub = stripe.Subscription.retrieve(any_subscription.stripe_subscription_id)
+                            if stripe_sub and stripe_sub.get('status') not in ['canceled', 'unpaid']:
+                                # Subscription exists in Stripe, update local record
+                                any_subscription.is_active = True
+                                any_subscription.status = stripe_sub.get('status', 'active')
+                                if stripe_sub.get('current_period_start'):
+                                    any_subscription.current_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'])
+                                if stripe_sub.get('current_period_end'):
+                                    any_subscription.current_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'])
+                                db.session.commit()
+                                print(f'✓ Synced subscription from Stripe for team {team_id}')
+                                subscriptions = [any_subscription]
+                        except Exception as stripe_error:
+                            print(f'Could not retrieve subscription from Stripe: {stripe_error}')
+                    
+                    # If still no subscription, try to find by customer
+                    if not subscriptions:
+                        # Search for subscriptions by customer email or other means
+                        # This is a last resort - we'll log it for debugging
+                        print(f'⚠ Could not find subscription in DB or Stripe for team {team_id}. Webhook may not have fired.')
+            except Exception as sync_error:
+                print(f'Error attempting to sync subscription from Stripe: {sync_error}')
         
         if not subscriptions:
             return jsonify({'error': 'No active subscription found'}), 404
@@ -152,8 +192,6 @@ def get_team_subscription(team_id):
             team_id=team_id, 
             is_active=True, 
             is_deleted=False
-        ).filter(
-            TeamSubscription.status != 'canceled'
         ).order_by(TeamSubscription.id.desc()).first()
         
         if not subscription:
@@ -492,14 +530,19 @@ def stripe_webhook():
 
 def handle_checkout_completed(session):
     """Handle successful checkout session."""
+    session_id = session.get('id')
     metadata = session.get('metadata', {})
     team_id = metadata.get('team_id')
     billing_user_id = metadata.get('billing_user_id')
     plan_id = metadata.get('plan_id')
     price_id = metadata.get('price_id')
     
+    print(f'[WEBHOOK] checkout.session.completed received: session_id={session_id}, team_id={team_id}, metadata={metadata}')
+    
     if not all([team_id, billing_user_id, plan_id, price_id]):
-        print(f'Missing metadata in checkout session: {session["id"]}')
+        print(f'ERROR: Missing metadata in checkout session: {session_id}')
+        print(f'Missing fields - team_id: {team_id}, billing_user_id: {billing_user_id}, plan_id: {plan_id}, price_id: {price_id}')
+        print(f'Full session metadata: {metadata}')
         return
     
     # Get subscription ID from checkout session if available
@@ -695,11 +738,16 @@ def handle_checkout_completed(session):
 def handle_subscription_created(subscription):
     """Handle new subscription creation (idempotent upsert)."""
     try:
+        stripe_subscription_id = subscription.get('id')
         metadata = subscription.get('metadata', {})
         team_id = metadata.get('team_id')
         
+        print(f'[WEBHOOK] subscription.created received: subscription_id={stripe_subscription_id}, team_id={team_id}, metadata={metadata}')
+        
         if not team_id:
-            print(f'Missing team_id in subscription metadata: {subscription.get("id")}')
+            print(f'ERROR: Missing team_id in subscription metadata: {subscription.get("id")}')
+            print(f'Full subscription object keys: {list(subscription.keys())}')
+            print(f'Metadata content: {metadata}')
             return
         
         # Find by team (normal case - created after checkout) or by stripe id
@@ -742,15 +790,64 @@ def handle_subscription_created(subscription):
         
         if not local_subscription:
             # As a safety net, create a minimal local record from metadata
-            local_subscription = TeamSubscription(
-                team_id=int(team_id),
-                billing_user_id=int(metadata.get('billing_user_id')) if metadata.get('billing_user_id') else None,
-                plan_id=int(metadata.get('plan_id')) if metadata.get('plan_id') else None,
-                price_id=int(metadata.get('price_id')) if metadata.get('price_id') else None,
-                is_active=True
-            )
-            db.session.add(local_subscription)
-            db.session.flush()
+            # Try to get required fields from metadata or fallback to defaults
+            billing_user_id = None
+            plan_id = None
+            price_id = None
+            
+            if metadata.get('billing_user_id'):
+                try:
+                    billing_user_id = int(metadata.get('billing_user_id'))
+                except (ValueError, TypeError):
+                    pass
+            
+            if metadata.get('plan_id'):
+                try:
+                    plan_id = int(metadata.get('plan_id'))
+                except (ValueError, TypeError):
+                    pass
+            
+            if metadata.get('price_id'):
+                try:
+                    price_id = int(metadata.get('price_id'))
+                except (ValueError, TypeError):
+                    pass
+            
+            # If metadata is missing, try to get from team (fallback)
+            if not billing_user_id or not plan_id or not price_id:
+                team = Team.query.get(int(team_id))
+                if team:
+                    if not billing_user_id:
+                        billing_user_id = team.created_by
+                    
+                    # Try to get default plan and price
+                    if not plan_id or not price_id:
+                        default_plan = PaymentPlan.query.filter_by(code='basic', is_active=True, is_deleted=False).first()
+                        if default_plan:
+                            if not plan_id:
+                                plan_id = default_plan.id
+                            if not price_id:
+                                default_price = PlanPrice.query.filter_by(plan_id=default_plan.id, is_active=True).first()
+                                if default_price:
+                                    price_id = default_price.id
+            
+            # Only create if we have all required fields
+            if billing_user_id and plan_id and price_id:
+                local_subscription = TeamSubscription(
+                    team_id=int(team_id),
+                    billing_user_id=billing_user_id,
+                    plan_id=plan_id,
+                    price_id=price_id,
+                    is_active=True
+                )
+                db.session.add(local_subscription)
+                db.session.flush()
+                print(f'Created subscription record from subscription.created webhook for team {team_id} (fallback)')
+            else:
+                print(f'ERROR: Cannot create subscription for team {team_id} - missing required fields. Metadata: {metadata}')
+                # Log the full subscription object for debugging
+                print(f'Full subscription object: {subscription}')
+                return  # Can't proceed without required fields
         
         # Update fields from Stripe
         stripe_status = subscription.get('status', 'incomplete')
@@ -943,6 +1040,58 @@ def handle_payment_failed(invoice):
             local_subscription.stripe_latest_invoice_id = invoice['id']
             db.session.commit()
             print(f'Payment failed for subscription: {subscription_id}')
+
+
+@bp.route('/subscriptions/<int:team_id>/debug', methods=['GET'])
+def debug_team_subscription(team_id):
+    """Debug endpoint to check subscription status and Stripe sync."""
+    try:
+        # Check local DB
+        local_subscriptions = TeamSubscription.query.filter_by(
+            team_id=team_id,
+            is_deleted=False
+        ).all()
+        
+        # Check Stripe
+        stripe_subscriptions = []
+        try:
+            # Try to find subscriptions by checking any existing stripe_subscription_id
+            for local_sub in local_subscriptions:
+                if local_sub.stripe_subscription_id:
+                    try:
+                        stripe_sub = stripe.Subscription.retrieve(local_sub.stripe_subscription_id)
+                        stripe_subscriptions.append({
+                            'stripe_id': local_sub.stripe_subscription_id,
+                            'status': stripe_sub.get('status'),
+                            'metadata': stripe_sub.get('metadata', {}),
+                            'customer': stripe_sub.get('customer'),
+                        })
+                    except Exception as e:
+                        stripe_subscriptions.append({
+                            'stripe_id': local_sub.stripe_subscription_id,
+                            'error': str(e)
+                        })
+        except Exception as e:
+            pass
+        
+        return jsonify({
+            'team_id': team_id,
+            'local_subscriptions': [{
+                'id': sub.id,
+                'stripe_subscription_id': sub.stripe_subscription_id,
+                'status': sub.status,
+                'is_active': sub.is_active,
+                'is_deleted': sub.is_deleted,
+                'plan_id': sub.plan_id,
+                'price_id': sub.price_id,
+                'billing_user_id': sub.billing_user_id,
+                'created_at': sub.created_at.isoformat() if sub.created_at else None,
+            } for sub in local_subscriptions],
+            'stripe_subscriptions': stripe_subscriptions,
+            'webhook_secret_configured': bool(os.getenv('STRIPE_WEBHOOK_SECRET')),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @bp.route('/stripe/catalog/basic/ensure', methods=['POST'])

@@ -122,8 +122,6 @@ def register_user():
                 billing_user_id=user_id, 
                 is_deleted=False,
                 is_active=True
-            ).filter(
-                TeamSubscription.status != 'canceled'
             ).order_by(TeamSubscription.id.desc())
             
             # Get the most recent subscription per team
@@ -188,8 +186,6 @@ def register_user():
                     TeamSubscription.billing_user_id != user_id,
                     TeamSubscription.is_deleted == False,
                     TeamSubscription.is_active == True
-                ).filter(
-                    TeamSubscription.status != 'canceled'
                 ).order_by(TeamSubscription.id.desc())
                 
                 # Get the most recent subscription per team
@@ -263,8 +259,6 @@ def login_user():
                     billing_user_id=user_id, 
                     is_deleted=False,
                     is_active=True
-                ).filter(
-                    TeamSubscription.status != 'canceled'
                 ).order_by(TeamSubscription.id.desc())
                 
                 # Get the most recent subscription per team
@@ -329,8 +323,6 @@ def login_user():
                         TeamSubscription.billing_user_id != user_id,
                         TeamSubscription.is_deleted == False,
                         TeamSubscription.is_active == True
-                    ).filter(
-                        TeamSubscription.status != 'canceled'
                     ).order_by(TeamSubscription.id.desc())
                     
                     # Get the most recent subscription per team
