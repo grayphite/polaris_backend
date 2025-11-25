@@ -469,37 +469,50 @@ def stripe_webhook():
     
     # Handle the event (defensive - never 500 to Stripe)
     try:
-        if event['type'] == 'checkout.session.completed':
+        event_type = event.get('type')
+        print(f'[WEBHOOK] Received event: {event_type}')
+        
+        if event_type == 'checkout.session.completed':
+            print(f'[WEBHOOK] Calling handle_checkout_completed')
             handle_checkout_completed(event['data']['object'])
-        elif event['type'] == 'customer.subscription.created':
+        elif event_type == 'customer.subscription.created':
+            print(f'[WEBHOOK] Calling handle_subscription_created')
             handle_subscription_created(event['data']['object'])
-        elif event['type'] == 'customer.subscription.updated':
+        elif event_type == 'customer.subscription.updated':
             handle_subscription_updated(event['data']['object'])
-        elif event['type'] == 'customer.subscription.deleted':
+        elif event_type == 'customer.subscription.deleted':
             handle_subscription_deleted(event['data']['object'])
-        elif event['type'] == 'invoice.payment_succeeded':
+        elif event_type == 'invoice.payment_succeeded':
             handle_payment_succeeded(event['data']['object'])
-        elif event['type'] == 'invoice.payment_failed':
+        elif event_type == 'invoice.payment_failed':
             handle_payment_failed(event['data']['object'])
         else:
-            print(f'Unhandled event type: {event["type"]}')
+            print(f'[WEBHOOK] Unhandled event type: {event_type}')
     except Exception as e:
         # Log and still return 200 so Stripe stops retrying
-        print(f'ERROR handling webhook {event.get("type")}: {e}')
+        import traceback
+        print(f'[WEBHOOK ERROR] Error handling webhook {event.get("type")}: {e}')
+        traceback.print_exc()
     
     return jsonify({'status': 'success'})
 
 
 def handle_checkout_completed(session):
     """Handle successful checkout session."""
+    session_id = session.get('id')
+    print(f'[CHECKOUT.COMPLETED] Processing session: {session_id}')
+    
     metadata = session.get('metadata', {})
     team_id = metadata.get('team_id')
     billing_user_id = metadata.get('billing_user_id')
     plan_id = metadata.get('plan_id')
     price_id = metadata.get('price_id')
     
+    print(f'[CHECKOUT.COMPLETED] Metadata: team_id={team_id}, billing_user_id={billing_user_id}, plan_id={plan_id}, price_id={price_id}')
+    
     if not all([team_id, billing_user_id, plan_id, price_id]):
-        print(f'Missing metadata in checkout session: {session["id"]}')
+        print(f'[CHECKOUT.COMPLETED] ERROR: Missing metadata in checkout session: {session_id}')
+        print(f'[CHECKOUT.COMPLETED] Missing fields - team_id: {team_id}, billing_user_id: {billing_user_id}, plan_id: {plan_id}, price_id: {price_id}')
         return
     
     # Get subscription ID from checkout session if available
@@ -583,6 +596,7 @@ def handle_checkout_completed(session):
                 pass
         
         db.session.add(subscription)
+        print(f'[CHECKOUT.COMPLETED] Added subscription to session for team {team_id}, subscription_id={subscription_id}')
     else:
         # Update existing subscription
         # If this is a different subscription_id, it means it's a new subscription
@@ -671,8 +685,15 @@ def handle_checkout_completed(session):
                     subscription.status = 'active'
                     subscription.is_active = True
     
-    db.session.commit()
-    print(f'Checkout completed for team {team_id}, payment_status: {payment_status}, status: {subscription.status}')
+    try:
+        db.session.commit()
+        print(f'[CHECKOUT.COMPLETED] ✅ COMMITTED subscription to database for team {team_id}, subscription_id={subscription.stripe_subscription_id if subscription else None}, status={subscription.status if subscription else None}')
+    except Exception as commit_error:
+        print(f'[CHECKOUT.COMPLETED] ❌ COMMIT FAILED for team {team_id}: {commit_error}')
+        import traceback
+        traceback.print_exc()
+        db.session.rollback()
+        raise  # Re-raise to be caught by webhook handler
     
     # CRITICAL: Sync subscription quantity with current team member count to apply overage billing
     # This ensures that if a team has more members than the plan allows (e.g., 5 members when plan allows 2),
@@ -698,8 +719,12 @@ def handle_subscription_created(subscription):
         metadata = subscription.get('metadata', {})
         team_id = metadata.get('team_id')
         
+        stripe_sub_id = subscription.get('id')
+        print(f'[SUBSCRIPTION.CREATED] Processing subscription: {stripe_sub_id}')
+        
         if not team_id:
-            print(f'Missing team_id in subscription metadata: {subscription.get("id")}')
+            print(f'[SUBSCRIPTION.CREATED] ERROR: Missing team_id in subscription metadata: {stripe_sub_id}')
+            print(f'[SUBSCRIPTION.CREATED] Full metadata: {metadata}')
             return
         
         # Find by team (normal case - created after checkout) or by stripe id
@@ -742,15 +767,27 @@ def handle_subscription_created(subscription):
         
         if not local_subscription:
             # As a safety net, create a minimal local record from metadata
+            print(f'[SUBSCRIPTION.CREATED] No local subscription found, creating new one for team {team_id}')
+            billing_user_id = int(metadata.get('billing_user_id')) if metadata.get('billing_user_id') else None
+            plan_id = int(metadata.get('plan_id')) if metadata.get('plan_id') else None
+            price_id = int(metadata.get('price_id')) if metadata.get('price_id') else None
+            
+            print(f'[SUBSCRIPTION.CREATED] Creating with: billing_user_id={billing_user_id}, plan_id={plan_id}, price_id={price_id}')
+            
+            if not billing_user_id or not plan_id or not price_id:
+                print(f'[SUBSCRIPTION.CREATED] ERROR: Cannot create subscription - missing required fields')
+                return
+            
             local_subscription = TeamSubscription(
                 team_id=int(team_id),
-                billing_user_id=int(metadata.get('billing_user_id')) if metadata.get('billing_user_id') else None,
-                plan_id=int(metadata.get('plan_id')) if metadata.get('plan_id') else None,
-                price_id=int(metadata.get('price_id')) if metadata.get('price_id') else None,
+                billing_user_id=billing_user_id,
+                plan_id=plan_id,
+                price_id=price_id,
                 is_active=True
             )
             db.session.add(local_subscription)
             db.session.flush()
+            print(f'[SUBSCRIPTION.CREATED] Added subscription to session, id={local_subscription.id}')
         
         # Update fields from Stripe
         stripe_status = subscription.get('status', 'incomplete')
@@ -778,8 +815,15 @@ def handle_subscription_created(subscription):
             local_subscription.status = 'active'
             print(f'Updated subscription status from incomplete to active for team {team_id}')
         
-        db.session.commit()
-        print(f'Subscription created/linked for team {team_id}, status: {local_subscription.status}')
+        try:
+            db.session.commit()
+            print(f'[SUBSCRIPTION.CREATED] ✅ COMMITTED subscription to database for team {team_id}, subscription_id={local_subscription.stripe_subscription_id}, status={local_subscription.status}')
+        except Exception as commit_error:
+            print(f'[SUBSCRIPTION.CREATED] ❌ COMMIT FAILED for team {team_id}: {commit_error}')
+            import traceback
+            traceback.print_exc()
+            db.session.rollback()
+            raise  # Re-raise to be caught by webhook handler
         
         # CRITICAL: Sync subscription quantity with current team member count to apply overage billing
         # This ensures that if a team has more members than the plan allows (e.g., 5 members when plan allows 2),
@@ -975,5 +1019,3 @@ def ensure_basic_catalog():
             'per_seat_amount_cents': price.per_seat_amount_cents,
         }
     })
-
-
