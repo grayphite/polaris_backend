@@ -14,6 +14,7 @@ from .user import User
 from .project import Project, ProjectMember
 from .chat import Chat
 from .ai_chat import AIChat, AIStats
+from .chat_reference import ChatReference
 from .team import Team, TeamMember
 from .invitation import Invitation
 from .stripe_payment import PaymentPlan, PlanPrice, TeamSubscription
@@ -22,5 +23,5 @@ __all__ = [
     'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
     'LegalSource', 'ScrapedContent', 'Project', 'ProjectMember', 'Chat', 'AIChat', 'AIStats',
-    'Team', 'TeamMember', 'Invitation', 'PaymentPlan', 'PlanPrice', 'TeamSubscription'
+    'ChatReference', 'Team', 'TeamMember', 'Invitation', 'PaymentPlan', 'PlanPrice', 'TeamSubscription'
 ]

@@ -34,7 +34,7 @@ class Chat(db.Model):
     
     # Relationships
     project = db.relationship('Project', back_populates='chats')
-    ai_conversations = db.relationship('AIChat', back_populates='chat', cascade='all, delete-orphan')
+    ai_conversations = db.relationship('AIChat', foreign_keys='AIChat.chat_id', back_populates='chat', cascade='all, delete-orphan')
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_chats')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_chats')
     

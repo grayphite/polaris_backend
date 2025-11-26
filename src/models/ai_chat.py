@@ -41,6 +41,7 @@ class AIChat(db.Model):
     file_references = db.Column(db.Text, nullable=True)  # JSON array of Anthropic file IDs used in this chat
     file_reference_details = db.Column(db.Text, nullable=True)  # JSON array of file detail dicts from upload API (id, filename, mime_type, size_bytes, etc.)
     rag_metadata = db.Column(db.JSON, nullable=True)  # RAG enhancement metadata including sources and processing info
+    referenced_chat_ids = db.Column(db.JSON, nullable=True)  # List of referenced chat IDs for context [1, 2, 3]
     
     # Timestamps
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -53,7 +54,7 @@ class AIChat(db.Model):
     deleted_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
     # Relationships
-    chat = db.relationship('Chat', back_populates='ai_conversations')
+    chat = db.relationship('Chat', foreign_keys=[chat_id], back_populates='ai_conversations')
     user = db.relationship('User', foreign_keys=[user_id], backref='ai_chats')
     deleter = db.relationship('User', foreign_keys=[deleted_by], backref='deleted_ai_chats')
     ai_stats = db.relationship('AIStats', back_populates='ai_chat', uselist=False, cascade='all, delete-orphan')
@@ -95,6 +96,7 @@ class AIChat(db.Model):
             'file_references': file_refs,
             'file_reference_details': file_details,
             'rag_metadata': self.rag_metadata,
+            'referenced_chat_ids': self.referenced_chat_ids if self.referenced_chat_ids else [],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_deleted': self.is_deleted,

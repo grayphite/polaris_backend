@@ -103,8 +103,8 @@ PLANS_CONFIG: List[Dict[str, Any]] = [
     {
         "plan": {
             "code": "basic",
-            "display_name": "Polaris Basic Plan",
-            "description": "Basic plan with limited team members",
+            "display_name": "Premium Plan",
+            "description": "Premium plan with limited team members",
             "stripe_product_id": "prod_TJoXEaVfycYbGe",
             "max_teams": 1,
             "max_projects": -1,
@@ -118,13 +118,13 @@ PLANS_CONFIG: List[Dict[str, Any]] = [
         "prices": [
             {
                 "key": "basic_monthly",
-                "nickname": "Basic Monthly",
+                "nickname": "Premium Monthly",
                 "currency": "brl",
                 "amount_cents": 0,  # base monthly price in cents
                 "compare_at_cents": None,
                 "interval": "month",
                 "interval_count": 1,
-                "trial_days": 14,
+                "trial_days": 7,
                 "stripe_price_id": "price_1SNAuKAIZic08EhhdUtSPQ1r",
                 "per_seat_amount_cents": 5000,  # 50 BRL per extra team member
                 "per_seat_metric": "team_member",
