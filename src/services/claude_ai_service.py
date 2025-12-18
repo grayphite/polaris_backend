@@ -5,13 +5,14 @@ Este service gerencia toda a comunicação com a API do Claude AI,
 incluindo chat, geração de documentos e análise de estruturas jurídicas.
 """
 
-import os
 import json
-import requests
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+import os
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, Any
+
+import requests
 
 
 @dataclass
@@ -20,7 +21,7 @@ class ChatMessage:
     role: str  # 'user' ou 'assistant'
     content: str
     timestamp: datetime = None
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.utcnow()
@@ -35,7 +36,7 @@ class AIResponse:
     usage: Dict = None
     context_used: List[str] = None
     timestamp: datetime = None
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.utcnow()
@@ -43,19 +44,24 @@ class AIResponse:
 
 class ClaudeAIService:
     """Service para integração com Claude AI"""
-    
+
     def __init__(self):
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.model = "claude-3-haiku-20240307"
-        self.max_tokens = 1000
+        # Derive max output tokens from env and clamp to Claude limits
+        try:
+            env_max_out = int(os.getenv('ANTHROPIC_MAX_OUTPUT_TOKENS', '8192'))
+        except Exception:
+            env_max_out = 8192
+        self.max_tokens = max(1, min(env_max_out, 8192))
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+
         if not self.api_key:
             self.logger.warning("ANTHROPIC_API_KEY não configurada - modo simulação")
-    
+
     def chat(self, prompt: str, user_id: int = None,
-             context: List[str] = None) -> AIResponse:
+             context: List[str] = None, rag_sources: List[Dict] = None) -> AIResponse:
         """
         Chat básico com Claude AI
         
@@ -63,6 +69,7 @@ class ClaudeAIService:
             prompt: Pergunta/prompt do usuário
             user_id: ID do usuário (para logging)
             context: Contexto adicional para enriquecer a resposta
+            rag_sources: Fontes RAG para atribuição
             
         Returns:
             AIResponse com a resposta da IA
@@ -77,17 +84,17 @@ class ClaudeAIService:
                              f"ANTHROPIC_API_KEY. Seu prompt foi: {prompt}"),
                     usage={'tokens': 0}
                 )
-            
+
             # Construir prompt com contexto se fornecido
-            enhanced_prompt = self._build_enhanced_prompt(prompt, context)
-            
+            enhanced_prompt = self._build_enhanced_prompt(prompt, context, rag_sources)
+
             # Preparar headers
             headers = {
                 "Content-Type": "application/json",
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01"
             }
-            
+
             # Preparar payload
             payload = {
                 "model": self.model,
@@ -99,7 +106,7 @@ class ClaudeAIService:
                     }
                 ]
             }
-            
+
             # Fazer requisição
             response = requests.post(
                 self.api_url,
@@ -107,15 +114,15 @@ class ClaudeAIService:
                 json=payload,
                 timeout=30
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('content', [{}])[0].get('text', '')
                 usage = data.get('usage', {})
-                
+
                 # Log da interação (se logging service estiver disponível)
                 self._log_interaction(user_id, prompt, content, usage)
-                
+
                 return AIResponse(
                     success=True,
                     content=content,
@@ -125,12 +132,12 @@ class ClaudeAIService:
             else:
                 error_msg = f"Erro na API Claude: {response.status_code} - {response.text}"
                 self._log_error(error_msg, user_id)
-                
+
                 return AIResponse(
                     success=False,
                     error="Erro na comunicação com IA. Tente novamente."
                 )
-                
+
         except requests.exceptions.Timeout:
             error_msg = "Timeout na comunicação com Claude AI"
             self._log_error(error_msg, user_id)
@@ -138,7 +145,7 @@ class ClaudeAIService:
                 success=False,
                 error="Timeout na comunicação com IA. Tente novamente."
             )
-            
+
         except Exception as e:
             error_msg = f"Erro inesperado no Claude AI: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -146,7 +153,7 @@ class ClaudeAIService:
                 success=False,
                 error="Erro interno. Tente novamente."
             )
-    
+
     def chat_with_rag(self, prompt: str, user_id: int = None) -> AIResponse:
         """
         Chat com RAG (Retrieval-Augmented Generation)
@@ -162,19 +169,19 @@ class ClaudeAIService:
         try:
             # Buscar contexto relevante (se search service estiver disponível)
             relevant_context = self._get_relevant_context(prompt)
-            
+
             # Chat com contexto
             return self.chat(prompt, user_id, relevant_context)
-            
+
         except Exception as e:
             # Fallback para chat sem RAG
             return self.chat(prompt, user_id)
-    
-    def generate_document(self, 
-                         document_type: str,
-                         client_data: Dict,
-                         template_data: Dict = None,
-                         user_id: int = None) -> AIResponse:
+
+    def generate_document(self,
+                          document_type: str,
+                          client_data: Dict,
+                          template_data: Dict = None,
+                          user_id: int = None) -> AIResponse:
         """
         Gerar documento jurídico usando Claude AI
         
@@ -190,14 +197,14 @@ class ClaudeAIService:
         try:
             # Construir prompt para geração de documento
             prompt = self._build_document_prompt(document_type, client_data, template_data)
-            
+
             # Usar modelo mais avançado para documentos
             original_model = self.model
             original_max_tokens = self.max_tokens
-            
+
             self.model = "claude-3-haiku-20240307"  # Modelo mais capaz
             self.max_tokens = 2000  # Mais tokens para documentos
-            
+
             try:
                 response = self.chat(prompt, user_id)
                 return response
@@ -205,7 +212,7 @@ class ClaudeAIService:
                 # Restaurar configurações originais
                 self.model = original_model
                 self.max_tokens = original_max_tokens
-                
+
         except Exception as e:
             error_msg = f"Erro na geração de documento: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -213,11 +220,11 @@ class ClaudeAIService:
                 success=False,
                 error="Erro na geração do documento. Tente novamente."
             )
-    
-    def analyze_legal_structure(self, 
-                               structure_data: Dict,
-                               jurisdiction: str = None,
-                               user_id: int = None) -> AIResponse:
+
+    def analyze_legal_structure(self,
+                                structure_data: Dict,
+                                jurisdiction: str = None,
+                                user_id: int = None) -> AIResponse:
         """
         Analisar estrutura jurídica e fornecer recomendações
         
@@ -232,12 +239,12 @@ class ClaudeAIService:
         try:
             # Construir prompt para análise
             prompt = self._build_analysis_prompt(structure_data, jurisdiction)
-            
+
             # Buscar contexto jurídico relevante
             legal_context = self._get_legal_context(structure_data, jurisdiction)
-            
+
             return self.chat(prompt, user_id, legal_context)
-            
+
         except Exception as e:
             error_msg = f"Erro na análise jurídica: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -245,11 +252,11 @@ class ClaudeAIService:
                 success=False,
                 error="Erro na análise. Tente novamente."
             )
-    
-    def get_recommendations(self, 
-                           client_profile: Dict,
-                           objectives: List[str],
-                           user_id: int = None) -> AIResponse:
+
+    def get_recommendations(self,
+                            client_profile: Dict,
+                            objectives: List[str],
+                            user_id: int = None) -> AIResponse:
         """
         Obter recomendações personalizadas de wealth planning
         
@@ -264,12 +271,12 @@ class ClaudeAIService:
         try:
             # Construir prompt para recomendações
             prompt = self._build_recommendations_prompt(client_profile, objectives)
-            
+
             # Buscar contexto de wealth planning
             wp_context = self._get_wealth_planning_context(client_profile)
-            
+
             return self.chat(prompt, user_id, wp_context)
-            
+
         except Exception as e:
             error_msg = f"Erro nas recomendações: {str(e)}"
             self._log_error(error_msg, user_id)
@@ -277,7 +284,7 @@ class ClaudeAIService:
                 success=False,
                 error="Erro ao gerar recomendações. Tente novamente."
             )
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Verificar saúde da integração com Claude AI
@@ -288,7 +295,7 @@ class ClaudeAIService:
         try:
             # Teste simples com a API
             test_response = self.chat("Hello", context=["Test"])
-            
+
             return {
                 "status": "healthy" if test_response.success else "unhealthy",
                 "api_key_configured": bool(self.api_key),
@@ -297,7 +304,7 @@ class ClaudeAIService:
                 "test_success": test_response.success,
                 "error": test_response.error if not test_response.success else None
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
@@ -307,143 +314,155 @@ class ClaudeAIService:
                 "test_success": False,
                 "error": str(e)
             }
-    
+
     # Métodos privados auxiliares
-    
-    def _build_enhanced_prompt(self, prompt: str, context: List[str] = None) -> str:
+
+    def _build_enhanced_prompt(self, prompt: str, context: List[str] = None, rag_sources: List[Dict] = None) -> str:
         """Construir prompt enriquecido com contexto"""
         if not context:
-            return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
+            return f"""You are a specialized assistant in wealth planning for tax lawyers.
 
-Responda de forma profissional e técnica, considerando:
-- Estruturas offshore (trusts, holdings, etc.)
-- Implicações fiscais no Brasil e internacionalmente
-- Compliance e regulamentações
-- Melhores práticas do setor
+Respond professionally and concisely, focusing only on relevant details. Keep responses brief and to the point.
 
-Pergunta: {prompt}"""
-        
+Consider:
+- Offshore structures (trusts, holdings, etc.)
+- Tax implications in Brazil and internationally
+- Compliance and regulations
+- Industry best practices
+
+Question: {prompt}"""
+
         context_text = "\n".join([f"- {ctx}" for ctx in context])
         
-        return f"""Você é um assistente especializado em wealth planning (planejamento patrimonial) para advogados tributaristas.
+        # Build source attribution if RAG sources are provided
+        source_attribution = ""
+        if rag_sources:
+            source_attribution = "\n\nIMPORTANT: When responding, always mention the sources of information when using the context above. Include:\n"
+            source_attribution += "- Country/jurisdiction when applicable\n"
+            source_attribution += "- Relevant section or chapter\n"
+            source_attribution += "- Example: 'According to Law X of country Y, article Z...'\n"
+            source_attribution += "- Be specific about the origin of the information\n\n"
 
-CONTEXTO RELEVANTE:
+        return f"""You are a specialized assistant in wealth planning for tax lawyers.
+
+RELEVANT CONTEXT FOUND:
 {context_text}
+{source_attribution}Based on the context above and your knowledge, respond professionally and concisely, focusing only on relevant details. Keep responses brief and to the point.
 
-Baseando-se no contexto acima e em seu conhecimento, responda de forma profissional e técnica, considerando:
-- Estruturas offshore (trusts, holdings, etc.)
-- Implicações fiscais no Brasil e internacionalmente
-- Compliance e regulamentações
-- Melhores práticas do setor
+Consider:
+- Offshore structures (trusts, holdings, etc.)
+- Tax implications in Brazil and internationally
+- Compliance and regulations
+- Industry best practices
 
-Pergunta: {prompt}"""
-    
+Question: {prompt}"""
+
     def _build_document_prompt(self, document_type: str, client_data: Dict, template_data: Dict = None) -> str:
         """Construir prompt para geração de documento"""
         client_info = json.dumps(client_data, indent=2, ensure_ascii=False)
-        
-        return f"""Você é um especialista em documentos jurídicos para wealth planning.
 
-Gere um documento profissional do tipo: {document_type.upper()}
+        return f"""You are an expert in legal documents for wealth planning.
 
-DADOS DO CLIENTE:
+Generate a professional document of type: {document_type.upper()}
+
+CLIENT DATA:
 {client_info}
 
-INSTRUÇÕES:
-1. Use linguagem jurídica apropriada
-2. Inclua todas as cláusulas necessárias
-3. Considere as melhores práticas internacionais
-4. Adapte para a legislação brasileira quando aplicável
-5. Formate de forma profissional
+INSTRUCTIONS:
+1. Use appropriate legal language
+2. Include all necessary clauses
+3. Consider international best practices
+4. Adapt to Brazilian legislation when applicable
+5. Format professionally
 
-Gere o documento completo:"""
-    
+Generate the complete document:"""
+
     def _build_analysis_prompt(self, structure_data: Dict, jurisdiction: str = None) -> str:
         """Construir prompt para análise jurídica"""
         structure_info = json.dumps(structure_data, indent=2, ensure_ascii=False)
-        jurisdiction_text = f" na jurisdição {jurisdiction}" if jurisdiction else ""
-        
-        return f"""Você é um especialista em estruturas jurídicas internacionais.
+        jurisdiction_text = f" in jurisdiction {jurisdiction}" if jurisdiction else ""
 
-Analise a seguinte estrutura{jurisdiction_text}:
+        return f"""You are an expert in international legal structures.
 
-ESTRUTURA:
+Analyze the following structure{jurisdiction_text}:
+
+STRUCTURE:
 {structure_info}
 
-FORNEÇA:
-1. Análise detalhada da estrutura
-2. Vantagens e desvantagens
-3. Riscos identificados
-4. Recomendações de melhoria
-5. Considerações fiscais
-6. Aspectos de compliance
+PROVIDE:
+1. Detailed analysis of the structure
+2. Advantages and disadvantages
+3. Identified risks
+4. Improvement recommendations
+5. Tax considerations
+6. Compliance aspects
 
-Análise:"""
-    
+Analysis:"""
+
     def _build_recommendations_prompt(self, client_profile: Dict, objectives: List[str]) -> str:
         """Construir prompt para recomendações"""
         profile_info = json.dumps(client_profile, indent=2, ensure_ascii=False)
         objectives_text = "\n".join([f"- {obj}" for obj in objectives])
-        
-        return f"""Você é um consultor especializado em wealth planning.
 
-PERFIL DO CLIENTE:
+        return f"""You are a specialized consultant in wealth planning.
+
+CLIENT PROFILE:
 {profile_info}
 
-OBJETIVOS:
+OBJECTIVES:
 {objectives_text}
 
-Forneça recomendações personalizadas incluindo:
-1. Estruturas jurídicas recomendadas
-2. Jurisdições mais adequadas
-3. Estratégias fiscais
-4. Cronograma de implementação
-5. Riscos e mitigações
-6. Próximos passos
+Provide personalized recommendations including:
+1. Recommended legal structures
+2. Most suitable jurisdictions
+3. Tax strategies
+4. Implementation timeline
+5. Risks and mitigations
+6. Next steps
 
-Recomendações:"""
-    
+Recommendations:"""
+
     def _get_relevant_context(self, prompt: str) -> List[str]:
-        """Buscar contexto relevante para RAG"""
+        """Search for relevant context for RAG"""
         try:
-            # Aqui integraria com o SearchService quando implementado
-            # Por enquanto, retorna contexto básico
+            # Here would integrate with SearchService when implemented
+            # For now, returns basic context
             return [
-                "Wealth planning envolve estruturas offshore para otimização fiscal",
-                "Trusts são veículos comuns para proteção patrimonial",
-                "Compliance internacional é crucial para estruturas offshore"
+                "Wealth planning involves offshore structures for tax optimization",
+                "Trusts are common vehicles for asset protection",
+                "International compliance is crucial for offshore structures"
             ]
         except:
             return []
-    
+
     def _get_legal_context(self, structure_data: Dict, jurisdiction: str = None) -> List[str]:
-        """Buscar contexto jurídico específico"""
+        """Search for specific legal context"""
         try:
-            # Aqui integraria com o LegalScrapingService quando implementado
+            # Here would integrate with LegalScrapingService when implemented
             return [
-                "Regulamentações internacionais sobre estruturas offshore",
-                "Tratados de bitributação aplicáveis",
-                "Requisitos de compliance por jurisdição"
+                "International regulations on offshore structures",
+                "Applicable double taxation treaties",
+                "Compliance requirements by jurisdiction"
             ]
         except:
             return []
-    
+
     def _get_wealth_planning_context(self, client_profile: Dict) -> List[str]:
-        """Buscar contexto de wealth planning"""
+        """Search for wealth planning context"""
         try:
-            # Contexto baseado no perfil do cliente
+            # Context based on client profile
             context = []
-            
+
             if client_profile.get('patrimonio_estimado', 0) > 10000000:
-                context.append("Cliente high net worth - estruturas complexas recomendadas")
-            
+                context.append("High net worth client - complex structures recommended")
+
             if client_profile.get('nacionalidade') == 'brasileira':
-                context.append("Considerações específicas para residentes fiscais brasileiros")
-            
+                context.append("Specific considerations for Brazilian tax residents")
+
             return context
         except:
             return []
-    
+
     def _log_interaction(self, user_id: int, prompt: str, response: str, usage: Dict):
         """Log da interação com IA"""
         try:
@@ -458,7 +477,7 @@ Recomendações:"""
             # logging_service.log_ai_interaction(log_data)
         except:
             pass
-    
+
     def _log_error(self, error_msg: str, user_id: int = None):
         """Log de erro"""
         try:
@@ -477,4 +496,3 @@ Recomendações:"""
 
 # Instância global do service
 claude_ai_service = ClaudeAIService()
-

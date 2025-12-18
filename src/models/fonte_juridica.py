@@ -3,14 +3,13 @@ Modelo para fontes jurídicas
 """
 from datetime import datetime
 
-# Importar db do user.py para manter consistência
-from .user import db
+from src.extensions import db
 
 
 class FonteJuridica(db.Model):
     """Modelo para fontes jurídicas usadas pelo MCP service"""
     __tablename__ = 'fontes_juridicas'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(255), nullable=False)
     url = db.Column(db.String(500))
@@ -18,8 +17,8 @@ class FonteJuridica(db.Model):
     conteudo = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow,
-                          onupdate=datetime.utcnow)
-    
+                           onupdate=datetime.utcnow)
+
     def to_dict(self):
         return {
             'id': self.id,

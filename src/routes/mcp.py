@@ -5,22 +5,18 @@ Implementa endpoints para upload de documentos, processamento,
 indexação e busca de conteúdo jurídico.
 """
 
+import os
+from functools import wraps
+
 from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
-from functools import wraps
-from typing import Dict, Any, Optional, List
-import os
-import tempfile
-import mimetypes
 
-from src.services.mcp_service import mcp_service
-from src.services.document_processor_service import document_processor_service
-from src.services.search_service import search_service
-from src.services.legal_scraping_service import legal_scraping_service
 from src.services.auth_service import auth_service, require_auth
-from src.services.logging_service import logging_service, LogLevel, ActionType, log_action
 from src.services.cache_service import cache_service
-
+from src.services.legal_scraping_service import legal_scraping_service
+from src.services.logging_service import logging_service, ActionType, log_action
+from src.services.mcp_service import mcp_service
+from src.services.search_service import search_service
 
 mcp_bp = Blueprint('mcp', __name__)
 
@@ -35,44 +31,44 @@ def validate_file_upload(allowed_extensions=None, max_size_mb=50):
     """
     if allowed_extensions is None:
         allowed_extensions = ['pdf', 'doc', 'docx', 'txt', 'rtf']
-    
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             try:
                 if 'file' not in request.files:
                     return jsonify({'error': 'Arquivo não fornecido'}), 400
-                
+
                 file = request.files['file']
                 if file.filename == '':
                     return jsonify({'error': 'Nome do arquivo vazio'}), 400
-                
+
                 # Verificar extensão
                 filename = secure_filename(file.filename)
                 if '.' not in filename:
                     return jsonify({'error': 'Arquivo sem extensão'}), 400
-                
+
                 extension = filename.rsplit('.', 1)[1].lower()
                 if extension not in allowed_extensions:
                     return jsonify({
                         'error': f'Extensão não permitida. Permitidas: {", ".join(allowed_extensions)}'
                     }), 400
-                
+
                 # Verificar tamanho (aproximado)
                 file.seek(0, 2)  # Ir para o final
                 size = file.tell()
                 file.seek(0)  # Voltar ao início
-                
+
                 if size > max_size_mb * 1024 * 1024:
                     return jsonify({
                         'error': f'Arquivo muito grande. Máximo: {max_size_mb}MB'
                     }), 400
-                
+
                 request.validated_file = file
                 request.validated_filename = filename
-                
+
                 return func(*args, **kwargs)
-                
+
             except Exception as e:
                 logging_service.error(
                     "MCPRoutes",
@@ -80,13 +76,15 @@ def validate_file_upload(allowed_extensions=None, max_size_mb=50):
                     f"Erro na validação do arquivo: {str(e)}"
                 )
                 return jsonify({'error': 'Erro na validação do arquivo'}), 400
-        
+
         return wrapper
+
     return decorator
 
 
 def handle_mcp_errors(func):
     """Decorador para tratamento de erros específicos do MCP"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -120,7 +118,7 @@ def handle_mcp_errors(func):
                 error_details={'error': str(e)}
             )
             return jsonify({'error': 'Erro interno do sistema MCP'}), 500
-    
+
     return wrapper
 
 
@@ -142,12 +140,12 @@ def upload_document():
     current_user = auth_service.get_current_user()
     file = request.validated_file
     filename = request.validated_filename
-    
+
     # Metadados opcionais
     category = request.form.get('category', 'general')
     tags = request.form.get('tags', '').split(',') if request.form.get('tags') else []
     description = request.form.get('description', '')
-    
+
     # Processar upload via service
     result = mcp_service.upload_document(
         file=file,
@@ -157,7 +155,7 @@ def upload_document():
         tags=[tag.strip() for tag in tags if tag.strip()],
         description=description
     )
-    
+
     # Log do upload
     logging_service.info(
         "MCPRoutes",
@@ -171,7 +169,7 @@ def upload_document():
             'document_id': result.get('document_id')
         }
     )
-    
+
     return jsonify(result), 201
 
 
@@ -191,20 +189,20 @@ def list_documents():
     - search: Buscar por nome ou descrição
     """
     current_user = auth_service.get_current_user()
-    
+
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 20, type=int), 100)
     category = request.args.get('category')
     status = request.args.get('status')
     search = request.args.get('search', '').strip()
-    
+
     # Verificar cache
     cache_key = f"mcp_documents_{current_user.id}_{page}_{per_page}_{category}_{status}_{search}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Listar documentos via service
     result = mcp_service.list_user_documents(
         user_id=current_user.id,
@@ -214,10 +212,10 @@ def list_documents():
         status=status,
         search=search
     )
-    
+
     # Cache por 5 minutos
     cache_service.set(cache_key, result, ttl=300)
-    
+
     return jsonify(result)
 
 
@@ -228,26 +226,26 @@ def list_documents():
 def get_document(document_id: str):
     """Obter documento específico"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = f"mcp_document_{document_id}_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter documento via service
     document = mcp_service.get_document(
         document_id=document_id,
         user_id=current_user.id
     )
-    
+
     if not document:
         return jsonify({'error': 'Documento não encontrado'}), 404
-    
+
     # Cache por 10 minutos
     cache_service.set(cache_key, document, ttl=600)
-    
+
     return jsonify(document)
 
 
@@ -258,21 +256,21 @@ def get_document(document_id: str):
 def delete_document(document_id: str):
     """Excluir documento"""
     current_user = auth_service.get_current_user()
-    
+
     # Excluir via service
     success = mcp_service.delete_document(
         document_id=document_id,
         user_id=current_user.id
     )
-    
+
     if not success:
         return jsonify({'error': 'Documento não encontrado'}), 404
-    
+
     # Invalidar caches
     cache_service.delete(f"mcp_document_{document_id}_{current_user.id}")
     cache_pattern = f"mcp_documents_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log da exclusão
     logging_service.info(
         "MCPRoutes",
@@ -281,7 +279,7 @@ def delete_document(document_id: str):
         user_id=current_user.id,
         metadata={'document_id': document_id}
     )
-    
+
     return jsonify({'message': 'Documento excluído com sucesso'})
 
 
@@ -292,16 +290,16 @@ def delete_document(document_id: str):
 def download_document(document_id: str):
     """Download do documento original"""
     current_user = auth_service.get_current_user()
-    
+
     # Obter caminho do arquivo via service
     file_path = mcp_service.get_document_file_path(
         document_id=document_id,
         user_id=current_user.id
     )
-    
+
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': 'Arquivo não encontrado'}), 404
-    
+
     # Log do download
     logging_service.info(
         "MCPRoutes",
@@ -310,7 +308,7 @@ def download_document(document_id: str):
         user_id=current_user.id,
         metadata={'document_id': document_id}
     )
-    
+
     return send_file(
         file_path,
         as_attachment=True,
@@ -325,21 +323,21 @@ def download_document(document_id: str):
 def reprocess_document(document_id: str):
     """Reprocessar documento"""
     current_user = auth_service.get_current_user()
-    
+
     # Reprocessar via service
     result = mcp_service.reprocess_document(
         document_id=document_id,
         user_id=current_user.id
     )
-    
+
     if not result:
         return jsonify({'error': 'Documento não encontrado'}), 404
-    
+
     # Invalidar caches
     cache_service.delete(f"mcp_document_{document_id}_{current_user.id}")
     cache_pattern = f"mcp_documents_{current_user.id}_*"
     cache_service.clear(cache_pattern)
-    
+
     # Log do reprocessamento
     logging_service.info(
         "MCPRoutes",
@@ -348,7 +346,7 @@ def reprocess_document(document_id: str):
         user_id=current_user.id,
         metadata={'document_id': document_id}
     )
-    
+
     return jsonify(result)
 
 
@@ -374,18 +372,18 @@ def search_documents():
     """
     current_user = auth_service.get_current_user()
     data = request.get_json()
-    
+
     if not data or 'query' not in data:
         return jsonify({'error': 'Query de busca é obrigatória'}), 400
-    
+
     query = data['query']
     filters = data.get('filters', {})
     limit = min(data.get('limit', 10), 50)
     include_content = data.get('include_content', False)
-    
+
     # Adicionar filtro de usuário
     filters['user_id'] = current_user.id
-    
+
     # Buscar via service
     results = search_service.semantic_search(
         query=query,
@@ -393,7 +391,7 @@ def search_documents():
         limit=limit,
         include_content=include_content
     )
-    
+
     # Log da busca
     logging_service.info(
         "MCPRoutes",
@@ -406,7 +404,7 @@ def search_documents():
             'results_count': len(results.get('results', []))
         }
     )
-    
+
     return jsonify(results)
 
 
@@ -417,20 +415,20 @@ def search_documents():
 def list_legal_sources():
     """Listar fontes jurídicas disponíveis"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = "mcp_legal_sources"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter fontes via service
     sources = legal_scraping_service.get_available_sources()
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, sources, ttl=3600)
-    
+
     return jsonify(sources)
 
 
@@ -441,14 +439,14 @@ def list_legal_sources():
 def scrape_legal_source(source_id: str):
     """Executar scraping de fonte jurídica específica"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar se usuário tem permissão (apenas admins)
     if not current_user.is_admin:
         return jsonify({'error': 'Acesso negado'}), 403
-    
+
     # Executar scraping via service
     result = legal_scraping_service.scrape_source(source_id)
-    
+
     # Log do scraping
     logging_service.info(
         "MCPRoutes",
@@ -460,7 +458,7 @@ def scrape_legal_source(source_id: str):
             'documents_found': result.get('documents_found', 0)
         }
     )
-    
+
     return jsonify(result)
 
 
@@ -471,14 +469,14 @@ def scrape_legal_source(source_id: str):
 def scrape_all_legal_sources():
     """Executar scraping de todas as fontes jurídicas"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar se usuário tem permissão (apenas admins)
     if not current_user.is_admin:
         return jsonify({'error': 'Acesso negado'}), 403
-    
+
     # Executar scraping via service
     result = legal_scraping_service.scrape_all_sources()
-    
+
     # Log do scraping
     logging_service.info(
         "MCPRoutes",
@@ -490,7 +488,7 @@ def scrape_all_legal_sources():
             'total_documents': result.get('total_documents', 0)
         }
     )
-    
+
     return jsonify(result)
 
 
@@ -501,18 +499,18 @@ def scrape_all_legal_sources():
 def rebuild_search_index():
     """Reconstruir índice de busca"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar se usuário tem permissão (apenas admins)
     if not current_user.is_admin:
         return jsonify({'error': 'Acesso negado'}), 403
-    
+
     # Reconstruir índice via service
     result = search_service.rebuild_index()
-    
+
     # Invalidar todos os caches de busca
     cache_service.clear("mcp_search_*")
     cache_service.clear("mcp_documents_*")
-    
+
     # Log da reconstrução
     logging_service.info(
         "MCPRoutes",
@@ -524,7 +522,7 @@ def rebuild_search_index():
             'index_size_mb': result.get('index_size_mb', 0)
         }
     )
-    
+
     return jsonify(result)
 
 
@@ -535,20 +533,20 @@ def rebuild_search_index():
 def get_mcp_statistics():
     """Obter estatísticas do sistema MCP"""
     current_user = auth_service.get_current_user()
-    
+
     # Verificar cache
     cache_key = f"mcp_statistics_{current_user.id}"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter estatísticas via service
     stats = mcp_service.get_statistics(current_user.id)
-    
+
     # Cache por 15 minutos
     cache_service.set(cache_key, stats, ttl=900)
-    
+
     return jsonify(stats)
 
 
@@ -560,11 +558,11 @@ def health_check():
         mcp_health = mcp_service.health_check()
         search_health = search_service.health_check()
         scraping_health = legal_scraping_service.health_check()
-        
+
         overall_status = "healthy"
         if any(h.get('status') != 'healthy' for h in [mcp_health, search_health, scraping_health]):
             overall_status = "degraded"
-        
+
         return jsonify({
             'status': overall_status,
             'service': 'mcp',
@@ -574,7 +572,7 @@ def health_check():
                 'scraping_service': scraping_health
             }
         })
-        
+
     except Exception as e:
         logging_service.error(
             "MCPRoutes",
@@ -596,16 +594,16 @@ def get_document_categories():
     # Verificar cache
     cache_key = "mcp_document_categories"
     cached_result = cache_service.get(cache_key)
-    
+
     if cached_result:
         return jsonify(cached_result)
-    
+
     # Obter categorias via service
     categories = mcp_service.get_document_categories()
-    
+
     # Cache por 1 hora
     cache_service.set(cache_key, categories, ttl=3600)
-    
+
     return jsonify(categories)
 
 
@@ -616,22 +614,22 @@ def get_document_categories():
 def bulk_upload_documents():
     """Upload em lote de documentos"""
     current_user = auth_service.get_current_user()
-    
+
     if 'files' not in request.files:
         return jsonify({'error': 'Arquivos não fornecidos'}), 400
-    
+
     files = request.files.getlist('files')
     if not files:
         return jsonify({'error': 'Lista de arquivos vazia'}), 400
-    
+
     # Limitar número de arquivos
     if len(files) > 20:
         return jsonify({'error': 'Máximo 20 arquivos por upload'}), 400
-    
+
     # Metadados opcionais
     category = request.form.get('category', 'general')
     tags = request.form.get('tags', '').split(',') if request.form.get('tags') else []
-    
+
     # Processar upload em lote via service
     result = mcp_service.bulk_upload_documents(
         files=files,
@@ -639,7 +637,7 @@ def bulk_upload_documents():
         category=category,
         tags=[tag.strip() for tag in tags if tag.strip()]
     )
-    
+
     # Log do upload em lote
     logging_service.info(
         "MCPRoutes",
@@ -654,6 +652,5 @@ def bulk_upload_documents():
             'failed_uploads': result.get('failed_uploads', 0)
         }
     )
-    
-    return jsonify(result)
 
+    return jsonify(result)

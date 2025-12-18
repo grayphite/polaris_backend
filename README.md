@@ -256,6 +256,52 @@ export SECRET_KEY="sua-chave-secreta-32-chars-minimo"
 python src/main.py
 ```
 
+## 🚀 Setup Rápido
+
+### 1. Instalar dependências
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configurar variáveis de ambiente
+Crie um arquivo `.env` na raiz do projeto com:
+```
+DATABASE_URL=sqlite:///polaris.db  # Ou sua URL do PostgreSQL
+SECRET_KEY=uma-chave-secreta
+PORT=5000
+```
+
+### 3. Inicializar banco de dados e migrações
+```bash
+flask db init           # Executar apenas uma vez
+flask db migrate -m "Initial migration"
+flask db upgrade
+```
+
+### 4. Rodar o servidor
+```bash
+python src/main.py
+```
+
+## 🛠️ Migrations e Banco de Dados
+- Use Flask-Migrate para gerenciar alterações no banco de dados.
+- Comandos principais:
+  - `flask db migrate -m "mensagem"` — cria uma nova migração
+  - `flask db upgrade` — aplica migrações
+  - `flask db downgrade` — desfaz migrações
+
+## 🔥 Application Factory & Blueprints
+- O app usa o padrão `create_app()` para escalabilidade.
+- Rotas são organizadas em Blueprints para modularidade.
+- Extensões (CORS, SQLAlchemy, Migrate) são inicializadas no factory.
+
+## 🧑‍💻 Testes
+- Testes estão em `tests/`.
+- Execute com:
+```bash
+pytest
+```
+
 ##  **Variáveis de Ambiente**
 
 ### **Obrigatórias**
@@ -507,4 +553,3 @@ pip install -r requirements.txt
 **POLARIS Backend** - Sistema de Wealth Planning com IA  
 Versão: 1.0.0 (Containerizada)  
 Última atualização: 2024-09-14
-

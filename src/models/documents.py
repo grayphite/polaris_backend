@@ -2,13 +2,14 @@
 Modelos para documentos e busca
 """
 from datetime import datetime
-from .user import db
+
+from src.extensions import db
 
 
 class DocumentoUpload(db.Model):
     """Modelo para documentos enviados pelos usuários"""
     __tablename__ = 'documentos_upload'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(255), nullable=False)
     path = db.Column(db.String(500), nullable=False)
@@ -16,7 +17,7 @@ class DocumentoUpload(db.Model):
     tamanho = db.Column(db.Integer)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -33,13 +34,13 @@ class DocumentoUpload(db.Model):
 class SearchIndex(db.Model):
     """Modelo para índice de busca"""
     __tablename__ = 'search_index'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     documento_id = db.Column(db.Integer, db.ForeignKey('documentos_upload.id'))
     conteudo = db.Column(db.Text)
     embedding = db.Column(db.Text)  # JSON serializado do embedding
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -53,7 +54,7 @@ class SearchIndex(db.Model):
 class LegalSource(db.Model):
     """Modelo para fontes legais scraped"""
     __tablename__ = 'legal_sources'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     url = db.Column(db.String(500), nullable=False, unique=True)
     nome = db.Column(db.String(255))
@@ -61,7 +62,7 @@ class LegalSource(db.Model):
     status = db.Column(db.String(50), default='pending')
     last_scraped = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -79,14 +80,14 @@ class LegalSource(db.Model):
 class ScrapedContent(db.Model):
     """Modelo para conteúdo extraído por scraping"""
     __tablename__ = 'scraped_content'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     source_id = db.Column(db.Integer, db.ForeignKey('legal_sources.id'))
     titulo = db.Column(db.String(255))
     conteudo = db.Column(db.Text)
     content_metadata = db.Column(db.Text)  # JSON serializado
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     def to_dict(self):
         return {
             'id': self.id,

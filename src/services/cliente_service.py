@@ -5,12 +5,13 @@ Este service gerencia todas as operações relacionadas aos clientes do POLARIS,
 incluindo criação, atualização, busca e análise de perfil de risco.
 """
 
-from typing import Dict, Optional
+import logging
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from typing import Dict, Optional
 
-from src.models import db, Cliente
+from src.extensions import db
+from src.models import Cliente
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,10 @@ class ClienteResult:
 
 class ClienteService:
     """Service para gestão de clientes"""
-    
+
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-    
+
     def criar_cliente(self, user_id: int, dados_cliente: Dict) -> ClienteResult:
         """
         Cria um novo cliente
@@ -50,18 +51,18 @@ class ClienteService:
                         success=False,
                         error=f"Campo '{field}' é obrigatório"
                     )
-            
+
             # Verificar se já existe cliente com mesmo email
             existing = Cliente.query.filter_by(
                 email=dados_cliente['email']
             ).first()
-            
+
             if existing:
                 return ClienteResult(
                     success=False,
                     error="Já existe um cliente com este email"
                 )
-            
+
             # Criar novo cliente
             cliente = Cliente(
                 nome=dados_cliente['nome'],
@@ -78,24 +79,24 @@ class ClienteService:
                 perfil_risco=dados_cliente.get('perfil_risco', 'moderado'),
                 user_id=user_id
             )
-            
+
             db.session.add(cliente)
             db.session.commit()
-            
+
             self.logger.info(f"Cliente criado: {cliente.id} - {cliente.nome}")
-            
+
             return ClienteResult(
                 success=True,
                 cliente=cliente.to_dict(),
                 message="Cliente criado com sucesso"
             )
-            
+
         except Exception as e:
             db.session.rollback()
             error_msg = f"Erro ao criar cliente: {str(e)}"
             self.logger.error(error_msg)
             return ClienteResult(success=False, error=error_msg)
-    
+
     def obter_cliente(self, cliente_id: int, user_id: int) -> ClienteResult:
         """
         Obtém dados de um cliente específico
@@ -112,25 +113,25 @@ class ClienteService:
                 id=cliente_id,
                 user_id=user_id
             ).first()
-            
+
             if not cliente:
                 return ClienteResult(
                     success=False,
                     error="Cliente não encontrado"
                 )
-            
+
             return ClienteResult(
                 success=True,
                 cliente=cliente.to_dict()
             )
-            
+
         except Exception as e:
             error_msg = f"Erro ao obter cliente: {str(e)}"
             self.logger.error(error_msg)
             return ClienteResult(success=False, error=error_msg)
-    
-    def listar_clientes(self, user_id: int, page: int = 1, 
-                       per_page: int = 20) -> Dict:
+
+    def listar_clientes(self, user_id: int, page: int = 1,
+                        per_page: int = 20) -> Dict:
         """
         Lista clientes do usuário com paginação
         
@@ -148,9 +149,9 @@ class ClienteService:
                 per_page=per_page,
                 error_out=False
             )
-            
+
             clientes = [cliente.to_dict() for cliente in pagination.items]
-            
+
             return {
                 'success': True,
                 'clientes': clientes,
@@ -161,7 +162,7 @@ class ClienteService:
                 'has_next': pagination.has_next,
                 'has_prev': pagination.has_prev
             }
-            
+
         except Exception as e:
             error_msg = f"Erro ao listar clientes: {str(e)}"
             self.logger.error(error_msg)
@@ -170,9 +171,9 @@ class ClienteService:
                 'error': error_msg,
                 'clientes': []
             }
-    
-    def atualizar_cliente(self, cliente_id: int, user_id: int, 
-                         dados: Dict) -> ClienteResult:
+
+    def atualizar_cliente(self, cliente_id: int, user_id: int,
+                          dados: Dict) -> ClienteResult:
         """
         Atualiza dados de um cliente
         
@@ -189,13 +190,13 @@ class ClienteService:
                 id=cliente_id,
                 user_id=user_id
             ).first()
-            
+
             if not cliente:
                 return ClienteResult(
                     success=False,
                     error="Cliente não encontrado"
                 )
-            
+
             # Atualizar campos permitidos
             allowed_fields = [
                 'nome', 'email', 'telefone', 'cpf', 'endereco',
@@ -203,28 +204,28 @@ class ClienteService:
                 'renda_mensal', 'patrimonio_total', 'objetivos_financeiros',
                 'perfil_risco'
             ]
-            
+
             for field in allowed_fields:
                 if field in dados:
                     setattr(cliente, field, dados[field])
-            
+
             cliente.updated_at = datetime.utcnow()
             db.session.commit()
-            
+
             self.logger.info(f"Cliente atualizado: {cliente.id}")
-            
+
             return ClienteResult(
                 success=True,
                 cliente=cliente.to_dict(),
                 message="Cliente atualizado com sucesso"
             )
-            
+
         except Exception as e:
             db.session.rollback()
             error_msg = f"Erro ao atualizar cliente: {str(e)}"
             self.logger.error(error_msg)
             return ClienteResult(success=False, error=error_msg)
-    
+
     def deletar_cliente(self, cliente_id: int, user_id: int) -> ClienteResult:
         """
         Remove um cliente (soft delete)
@@ -241,33 +242,33 @@ class ClienteService:
                 id=cliente_id,
                 user_id=user_id
             ).first()
-            
+
             if not cliente:
                 return ClienteResult(
                     success=False,
                     error="Cliente não encontrado"
                 )
-            
+
             # Soft delete - apenas marcar como inativo
             cliente.ativo = False
             cliente.updated_at = datetime.utcnow()
             db.session.commit()
-            
+
             self.logger.info(f"Cliente removido: {cliente.id}")
-            
+
             return ClienteResult(
                 success=True,
                 message="Cliente removido com sucesso"
             )
-            
+
         except Exception as e:
             db.session.rollback()
             error_msg = f"Erro ao remover cliente: {str(e)}"
             self.logger.error(error_msg)
             return ClienteResult(success=False, error=error_msg)
-    
-    def analisar_perfil_risco(self, cliente_id: int, 
-                             user_id: int) -> Dict:
+
+    def analisar_perfil_risco(self, cliente_id: int,
+                              user_id: int) -> Dict:
         """
         Analisa e sugere perfil de risco baseado nos dados do cliente
         
@@ -283,17 +284,17 @@ class ClienteService:
                 id=cliente_id,
                 user_id=user_id
             ).first()
-            
+
             if not cliente:
                 return {
                     'success': False,
                     'error': 'Cliente não encontrado'
                 }
-            
+
             # Lógica simples de análise de perfil
             pontuacao = 0
             fatores = []
-            
+
             # Idade (se disponível)
             if cliente.data_nascimento:
                 idade = (datetime.now() - cliente.data_nascimento).days // 365
@@ -303,7 +304,7 @@ class ClienteService:
                 elif idade < 30:
                     pontuacao += 1
                     fatores.append("Idade jovem permite maior tolerância")
-            
+
             # Renda
             if cliente.renda_mensal:
                 if cliente.renda_mensal > 10000:
@@ -312,13 +313,13 @@ class ClienteService:
                 elif cliente.renda_mensal < 3000:
                     pontuacao -= 1
                     fatores.append("Renda baixa sugere menor tolerância")
-            
+
             # Patrimônio
             if cliente.patrimonio_total:
                 if cliente.patrimonio_total > 100000:
                     pontuacao += 1
                     fatores.append("Patrimônio alto permite maior risco")
-            
+
             # Determinar perfil sugerido
             if pontuacao >= 2:
                 perfil_sugerido = "arrojado"
@@ -326,7 +327,7 @@ class ClienteService:
                 perfil_sugerido = "conservador"
             else:
                 perfil_sugerido = "moderado"
-            
+
             return {
                 'success': True,
                 'cliente_id': cliente_id,
@@ -335,9 +336,9 @@ class ClienteService:
                 'pontuacao': pontuacao,
                 'fatores_analisados': fatores,
                 'recomendacao': (f"Baseado na análise, sugerimos o perfil "
-                               f"'{perfil_sugerido}' para este cliente.")
+                                 f"'{perfil_sugerido}' para este cliente.")
             }
-            
+
         except Exception as e:
             error_msg = f"Erro na análise de perfil: {str(e)}"
             self.logger.error(error_msg)

@@ -5,16 +5,16 @@ Este service gerencia o sistema MCP (Model Context Protocol) para integração
 com fontes jurídicas dos EUA e Brasil, incluindo web scraping e indexação.
 """
 
-import os
-import json
-import requests
+import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
-import time
 
-from src.models import db, FonteJuridica
+import requests
+
+from src.extensions import db
+from src.models import FonteJuridica
 
 
 @dataclass
@@ -42,7 +42,7 @@ class MCPDocument:
 
 class MCPService:
     """Service para Model Context Protocol"""
-    
+
     def __init__(self):
         self.sources_config = {
             'usa': {
@@ -109,15 +109,15 @@ class MCPService:
                 }
             }
         }
-        
+
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
-        
+
         self.request_delay = 2  # Segundos entre requisições
         self.timeout = 30
-    
+
     def scrape_all_sources(self, force_update: bool = False) -> Dict[str, ScrapingResult]:
         """
         Fazer scraping de todas as fontes configuradas
@@ -129,29 +129,29 @@ class MCPService:
             Dict com resultados por fonte
         """
         results = {}
-        
+
         for country, sources in self.sources_config.items():
             for source_key, source_config in sources.items():
                 try:
                     # Verificar se precisa atualizar
                     if not force_update and not self._needs_update(source_key):
                         continue
-                    
+
                     result = self._scrape_source(source_key, source_config)
                     results[f"{country}_{source_key}"] = result
-                    
+
                     # Delay entre fontes
                     time.sleep(self.request_delay)
-                    
+
                 except Exception as e:
                     results[f"{country}_{source_key}"] = ScrapingResult(
                         success=False,
                         source_name=source_config['name'],
                         error=str(e)
                     )
-        
+
         return results
-    
+
     def scrape_source(self, source_key: str, force_update: bool = False) -> ScrapingResult:
         """
         Fazer scraping de uma fonte específica
@@ -173,14 +173,14 @@ class MCPService:
                         break
                 if source_config:
                     break
-            
+
             if not source_config:
                 return ScrapingResult(
                     success=False,
                     source_name=source_key,
                     error="Fonte não encontrada"
                 )
-            
+
             # Verificar se precisa atualizar
             if not force_update and not self._needs_update(source_key):
                 return ScrapingResult(
@@ -190,16 +190,16 @@ class MCPService:
                     content=[],
                     error="Fonte já atualizada recentemente"
                 )
-            
+
             return self._scrape_source(source_key, source_config)
-            
+
         except Exception as e:
             return ScrapingResult(
                 success=False,
                 source_name=source_key,
                 error=str(e)
             )
-    
+
     def get_legal_context(self, query: str, max_results: int = 5) -> List[MCPDocument]:
         """
         Obter contexto jurídico relevante para uma consulta
@@ -243,15 +243,15 @@ class MCPService:
                     relevance_score=0.82
                 )
             ]
-            
+
             # Filtrar por relevância e limitar resultados
             relevant_docs = [doc for doc in mock_documents if doc.relevance_score > 0.7]
             return relevant_docs[:max_results]
-            
+
         except Exception as e:
             self._log_error(f"Erro ao obter contexto jurídico: {str(e)}")
             return []
-    
+
     def get_source_status(self) -> Dict[str, Any]:
         """
         Obter status de todas as fontes
@@ -261,16 +261,16 @@ class MCPService:
         """
         try:
             status = {}
-            
+
             for country, sources in self.sources_config.items():
                 status[country] = {}
-                
+
                 for source_key, source_config in sources.items():
                     # Buscar última atualização no banco
                     fonte = FonteJuridica.query.filter_by(
                         source_key=f"{country}_{source_key}"
                     ).first()
-                    
+
                     if fonte:
                         status[country][source_key] = {
                             'name': source_config['name'],
@@ -287,13 +287,13 @@ class MCPService:
                             'documents_count': 0,
                             'category': source_config['category']
                         }
-            
+
             return status
-            
+
         except Exception as e:
             self._log_error(f"Erro ao obter status das fontes: {str(e)}")
             return {}
-    
+
     def update_source_config(self, source_key: str, config: Dict) -> bool:
         """
         Atualizar configuração de uma fonte
@@ -308,7 +308,7 @@ class MCPService:
         try:
             # Encontrar e atualizar fonte no banco
             fonte = FonteJuridica.query.filter_by(source_key=source_key).first()
-            
+
             if not fonte:
                 # Criar nova fonte
                 fonte = FonteJuridica(
@@ -327,15 +327,15 @@ class MCPService:
                 fonte.category = config.get('category', fonte.category)
                 fonte.config = config
                 fonte.updated_at = datetime.utcnow()
-            
+
             db.session.commit()
             return True
-            
+
         except Exception as e:
             db.session.rollback()
             self._log_error(f"Erro ao atualizar configuração: {str(e)}")
             return False
-    
+
     def get_categories_stats(self) -> Dict[str, Any]:
         """
         Obter estatísticas por categoria
@@ -346,11 +346,11 @@ class MCPService:
         try:
             # Contar documentos por categoria
             categories = {}
-            
+
             for country, sources in self.sources_config.items():
                 for source_key, source_config in sources.items():
                     category = source_config['category']
-                    
+
                     if category not in categories:
                         categories[category] = {
                             'name': category.replace('_', ' ').title(),
@@ -358,28 +358,28 @@ class MCPService:
                             'documents': 0,
                             'countries': set()
                         }
-                    
+
                     categories[category]['sources'] += 1
                     categories[category]['countries'].add(country.upper())
-                    
+
                     # Buscar contagem de documentos
                     fonte = FonteJuridica.query.filter_by(
                         source_key=f"{country}_{source_key}"
                     ).first()
-                    
+
                     if fonte and fonte.documents_count:
                         categories[category]['documents'] += fonte.documents_count
-            
+
             # Converter sets para listas
             for category in categories.values():
                 category['countries'] = list(category['countries'])
-            
+
             return categories
-            
+
         except Exception as e:
             self._log_error(f"Erro nas estatísticas: {str(e)}")
             return {}
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Verificar saúde do sistema MCP
@@ -390,15 +390,15 @@ class MCPService:
         try:
             # Testar conectividade com algumas fontes
             connectivity_tests = {}
-            
+
             test_sources = [
                 ('usa', 'irs'),
                 ('brazil', 'receita_federal')
             ]
-            
+
             for country, source_key in test_sources:
                 source_config = self.sources_config[country][source_key]
-                
+
                 try:
                     response = self.session.head(
                         source_config['base_url'],
@@ -414,11 +414,11 @@ class MCPService:
                         'status': 'unreachable',
                         'error': str(e)
                     }
-            
+
             # Estatísticas do banco
             total_sources = FonteJuridica.query.count()
             active_sources = FonteJuridica.query.filter_by(active=True).count()
-            
+
             return {
                 "status": "healthy" if active_sources > 0 else "warning",
                 "sources": {
@@ -434,32 +434,32 @@ class MCPService:
                 },
                 "last_check": datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
                 "error": str(e),
                 "last_check": datetime.utcnow().isoformat()
             }
-    
+
     # Métodos privados auxiliares
-    
+
     def _scrape_source(self, source_key: str, source_config: Dict) -> ScrapingResult:
         """Fazer scraping de uma fonte específica"""
         try:
             documents = []
             base_url = source_config['base_url']
-            
+
             for endpoint in source_config['endpoints']:
                 try:
                     url = urljoin(base_url, endpoint)
-                    
+
                     response = self.session.get(url, timeout=self.timeout)
                     response.raise_for_status()
-                    
+
                     # Extrair conteúdo (simulação)
                     content = self._extract_content_from_html(response.text, url)
-                    
+
                     if content:
                         documents.append({
                             'title': content.get('title', 'Untitled'),
@@ -468,17 +468,17 @@ class MCPService:
                             'category': source_config['category'],
                             'scraped_at': datetime.utcnow().isoformat()
                         })
-                    
+
                     # Delay entre requisições
                     time.sleep(self.request_delay)
-                    
+
                 except requests.exceptions.RequestException as e:
                     self._log_error(f"Erro ao acessar {url}: {str(e)}")
                     continue
-            
+
             # Salvar no banco de dados
             self._save_scraped_data(source_key, source_config, documents)
-            
+
             return ScrapingResult(
                 success=True,
                 source_name=source_config['name'],
@@ -486,20 +486,20 @@ class MCPService:
                 content=documents,
                 last_updated=datetime.utcnow()
             )
-            
+
         except Exception as e:
             return ScrapingResult(
                 success=False,
                 source_name=source_config['name'],
                 error=str(e)
             )
-    
+
     def _extract_content_from_html(self, html: str, url: str) -> Optional[Dict]:
         """Extrair conteúdo relevante do HTML"""
         try:
             # Simulação de extração de conteúdo
             # Em implementação real, usaria BeautifulSoup ou similar
-            
+
             # Detectar tipo de conteúdo baseado na URL
             if 'irs.gov' in url:
                 return {
@@ -526,17 +526,17 @@ class MCPService:
                     'title': f'Legal Document from {urlparse(url).netloc}',
                     'content': 'Legal guidance and regulatory information relevant to wealth planning and international tax compliance.'
                 }
-                
+
         except Exception as e:
             self._log_error(f"Erro na extração de conteúdo: {str(e)}")
             return None
-    
+
     def _save_scraped_data(self, source_key: str, source_config: Dict, documents: List[Dict]):
         """Salvar dados coletados no banco"""
         try:
             # Buscar ou criar fonte
             fonte = FonteJuridica.query.filter_by(source_key=source_key).first()
-            
+
             if not fonte:
                 fonte = FonteJuridica(
                     source_key=source_key,
@@ -547,35 +547,35 @@ class MCPService:
                     active=True
                 )
                 db.session.add(fonte)
-            
+
             # Atualizar informações da fonte
             fonte.last_scraped = datetime.utcnow()
             fonte.documents_count = len(documents)
             fonte.last_content = documents
             fonte.updated_at = datetime.utcnow()
-            
+
             db.session.commit()
-            
+
         except Exception as e:
             db.session.rollback()
             self._log_error(f"Erro ao salvar dados: {str(e)}")
-    
+
     def _needs_update(self, source_key: str) -> bool:
         """Verificar se fonte precisa ser atualizada"""
         try:
             fonte = FonteJuridica.query.filter_by(source_key=source_key).first()
-            
+
             if not fonte or not fonte.last_scraped:
                 return True
-            
+
             # Atualizar se passou mais de 24 horas
             time_diff = datetime.utcnow() - fonte.last_scraped
             return time_diff > timedelta(hours=24)
-            
+
         except Exception as e:
             self._log_error(f"Erro ao verificar necessidade de atualização: {str(e)}")
             return True
-    
+
     def _log_error(self, error_msg: str):
         """Log de erro"""
         try:
@@ -586,4 +586,3 @@ class MCPService:
 
 # Instância global do service
 mcp_service = MCPService()
-

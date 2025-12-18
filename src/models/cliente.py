@@ -1,63 +1,65 @@
-from src.models.user import db
 from datetime import datetime
+
+from src.extensions import db
+
 
 class Cliente(db.Model):
     """Modelo para clientes do sistema POLARIS"""
     __tablename__ = 'clientes'
-    
+
     id = db.Column(db.Integer, primary_key=True)
-    
+
     # Dados pessoais básicos
     nome_completo = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), nullable=False)
     telefone = db.Column(db.String(20))
     data_nascimento = db.Column(db.Date)
     nacionalidade = db.Column(db.String(50))
-    
+
     # Documentos
     cpf = db.Column(db.String(14))  # Formato: 000.000.000-00
     passaporte = db.Column(db.String(20))
     rg = db.Column(db.String(20))
-    
+
     # Endereço
     endereco_completo = db.Column(db.Text)
     cidade = db.Column(db.String(100))
     estado = db.Column(db.String(50))
     cep = db.Column(db.String(10))
     pais = db.Column(db.String(50))
-    
+
     # Informações profissionais
     profissao = db.Column(db.String(100))
     empresa = db.Column(db.String(200))
     cargo = db.Column(db.String(100))
-    
+
     # Informações financeiras
     renda_anual = db.Column(db.Numeric(15, 2))
     patrimonio_total = db.Column(db.Numeric(15, 2))
     origem_patrimonio = db.Column(db.Text)  # História de construção do patrimônio
-    
+
     # Status de residência fiscal
     residente_fiscal_brasil = db.Column(db.Boolean, default=True)
     residente_fiscal_eua = db.Column(db.Boolean, default=False)
     outros_paises_residencia = db.Column(db.Text)
-    
+
     # Objetivos de planejamento
     objetivos_planejamento = db.Column(db.Text)
     tolerancia_risco = db.Column(db.String(20))  # Baixa, Média, Alta
     horizonte_investimento = db.Column(db.String(50))  # Curto, Médio, Longo prazo
-    
+
     # Estruturas existentes
     possui_offshore = db.Column(db.Boolean, default=False)
     detalhes_offshore = db.Column(db.Text)
     possui_trust = db.Column(db.Boolean, default=False)
     detalhes_trust = db.Column(db.Text)
-    
+
     # Metadados
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relacionamentos
     documentos_gerados = db.relationship('DocumentoGerado', backref='cliente', lazy=True)
 
@@ -113,4 +115,3 @@ class Cliente(db.Model):
             'patrimonio_total': float(self.patrimonio_total) if self.patrimonio_total else None,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
-

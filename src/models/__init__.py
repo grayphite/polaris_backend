@@ -2,18 +2,26 @@
 Modelos de dados do POLARIS
 """
 
-from .user import db, User
-from .cliente import Cliente
-from .template_documento import TemplateDeDocumento
-from .documento_gerado import DocumentoGerado
-from .fonte_juridica import FonteJuridica
 from .audit_log import AuditLog
-from .documents import (DocumentoUpload, SearchIndex,
-                        LegalSource, ScrapedContent)
+from .cliente import Cliente
+from .documento_gerado import DocumentoGerado
+from .documents import (
+    DocumentoUpload, SearchIndex, LegalSource, ScrapedContent
+)
+from .fonte_juridica import FonteJuridica
+from .template_documento import TemplateDeDocumento
+from .user import User
+from .project import Project, ProjectMember
+from .chat import Chat
+from .ai_chat import AIChat, AIStats
+from .chat_reference import ChatReference
+from .team import Team, TeamMember
+from .invitation import Invitation
+from .stripe_payment import PaymentPlan, PlanPrice, TeamSubscription
 
 __all__ = [
-    'db', 'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
+    'User', 'Cliente', 'TemplateDeDocumento', 'DocumentoGerado',
     'FonteJuridica', 'AuditLog', 'DocumentoUpload', 'SearchIndex',
-    'LegalSource', 'ScrapedContent'
+    'LegalSource', 'ScrapedContent', 'Project', 'ProjectMember', 'Chat', 'AIChat', 'AIStats',
+    'ChatReference', 'Team', 'TeamMember', 'Invitation', 'PaymentPlan', 'PlanPrice', 'TeamSubscription'
 ]
-
