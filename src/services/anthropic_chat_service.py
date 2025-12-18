@@ -463,10 +463,9 @@ class AnthropicChatService:
                     # Pass through other events
                     yield event
             
-            # Check if this is the first AI chat in the conversation
+            # Check if this is the first AI chat in the conversation (regardless of user)
             existing_ai_chats_count = AIChat.query.filter_by(
                 chat_id=chat_id, 
-                user_id=user_id, 
                 is_deleted=False
             ).count()
             
@@ -778,10 +777,9 @@ class AnthropicChatService:
                     error=f"Anthropic API error: {anthropic_response.error}"
                 )
             
-            # Check if this is the first AI chat in the conversation
+            # Check if this is the first AI chat in the conversation (regardless of user)
             existing_ai_chats_count = AIChat.query.filter_by(
                 chat_id=chat_id, 
-                user_id=user_id, 
                 is_deleted=False
             ).count()
             
